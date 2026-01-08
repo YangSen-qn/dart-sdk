@@ -9,9 +9,14 @@ abstract class HostProvider {
     int regionIndex = 0,
   });
 
+  // 判断一个域名是否被冻结
   bool isFrozen(String host);
 
+  // 冻结一个域名
   void freezeHost(String host);
+
+  // 解封一个域名
+  void unfreezeOne() {}
 }
 
 List<String> _defaultBucketHosts = [
@@ -47,8 +52,19 @@ abstract class HostFreezer extends HostProvider {
     // 解冻需要被解冻的 host
     _frozenUpDomains.removeWhere((domain) => !domain.isFrozen());
   }
+
+  @override
+  void unfreezeOne() {
+    // 随机解冻一个 host
+    if (_frozenUpDomains.isNotEmpty) {
+      final index = Random(DateTime.now().millisecondsSinceEpoch)
+          .nextInt(_frozenUpDomains.length);
+      _frozenUpDomains.removeAt(index);
+    }
+  }
 }
 
+@Deprecated('Use DefaultHostProviderV2 instead')
 class DefaultHostProvider extends HostFreezer {
   var protocol = Protocol.Https.value;
   var bucketHosts = _defaultBucketHosts;
