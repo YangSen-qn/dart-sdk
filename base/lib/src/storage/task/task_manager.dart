@@ -11,9 +11,8 @@ class TaskManager {
   @mustCallSuper
   void addTask(Task task) async {
     try {
-      task
-        ..manager = this
-        ..preStart();
+      task.manager = this;
+      await task.preStart();
     } catch (e) {
       task.postError(e);
       return;

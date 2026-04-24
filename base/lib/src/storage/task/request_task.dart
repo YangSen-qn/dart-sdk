@@ -35,7 +35,7 @@ abstract class RequestTask<T> extends Task<T> {
 
   @override
   @mustCallSuper
-  void preStart() async {
+  Future<void> preStart() async {
     // 如果已经取消了，直接报错
     if (controller != null && controller!.cancelToken.isCancelled) {
       throw StorageError(type: StorageErrorType.CANCEL);

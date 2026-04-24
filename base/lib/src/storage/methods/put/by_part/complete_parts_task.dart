@@ -28,9 +28,9 @@ class CompletePartsTask extends RequestTask<PutResponse> {
   }) : super(controller: controller);
 
   @override
-  void preStart() {
+  Future<void> preStart() async {
     _tokenInfo = Auth.parseUpToken(token);
-    super.preStart();
+    await super.preStart();
   }
 
   @override

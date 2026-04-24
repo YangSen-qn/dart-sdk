@@ -35,8 +35,8 @@ class PutByPartTask extends RequestTask<PutResponse> {
   RequestTaskController? _currentWorkingTaskController;
 
   @override
-  void preStart() {
-    super.preStart();
+  Future<void> preStart() async {
+    await super.preStart();
 
     // 处理相同任务
     final sameTaskExist = manager

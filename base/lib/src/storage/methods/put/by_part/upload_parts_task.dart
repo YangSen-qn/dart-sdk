@@ -63,8 +63,8 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
   }
 
   @override
-  void preStart() {
-    super.preStart();
+  Future<void> preStart() async {
+    await super.preStart();
     // 当前 controller 被取消后，所有运行中的子任务都需要被取消
     controller?.cancelToken.whenCancel.then((_) {
       for (final controller in _workingUploadPartTaskControllers) {

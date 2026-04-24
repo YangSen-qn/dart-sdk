@@ -24,7 +24,7 @@ abstract class Task<T> {
 
   /// [Task] 启动之前会调用，该方法只会在第一次被 [TaskManager] 初始化的时候调用
   @mustCallSuper
-  void preStart() {}
+  Future<void> preStart() async {}
 
   /// [createTask] 执行之后会调用
   @mustCallSuper

@@ -55,10 +55,10 @@ class InitPartsTask extends RequestTask<InitParts> with CacheMixin<InitParts> {
   }
 
   @override
-  void preStart() {
+  Future<void> preStart() async {
     _tokenInfo = Auth.parseUpToken(token);
     _cacheKey = InitPartsTask.getCacheKey(resource.id, key);
-    super.preStart();
+    await super.preStart();
   }
 
   @override
