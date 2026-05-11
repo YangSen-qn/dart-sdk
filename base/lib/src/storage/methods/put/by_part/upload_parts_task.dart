@@ -26,8 +26,18 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
   // 处理分片上传任务的 UploadPartTask 的控制器
   final List<RequestTaskController> _workingUploadPartTaskControllers = [];
 
-  // 已发送分片数量
-  int _sentPartCount = 0;
+  // 已发送分片数量（实数形式）
+  //
+  // 整数部分表示"已完成 / 跳过的分片数"，小数部分累计了"当前在传分片"的进度，
+  // 通过累加每片 onSendProgress 的 delta-percent 得到，
+  // 支持分片内（次级切片粒度）的细粒度发送进度。
+  // 配合 [_partProgressMap] 处理 retry / 跳过缓存分片的回滚和补偿。
+  double _sentPartCount = 0;
+
+  // 记录每个 partNumber 上一次报告的 percent，用于算 delta。
+  // retry 时 dio 会从 0 重新累积 percent，监测到 percent < last 即视为回到 0 重发，
+  // 需要先把上一轮的累计退还再按新值累加。
+  final Map<int, double> _partProgressMap = {};
 
   // 已发送到服务器的数量
   int _sentPartToServerCount = 0;
@@ -148,7 +158,9 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
         // 跳过上传过的分片
         final uploadedPart = _uploadedPartMap[partNumber];
         if (uploadedPart != null) {
-          _sentPartCount++;
+          // 缓存命中：直接按"整片完成"计入，并占位防止后续重复累计
+          _sentPartCount += 1.0;
+          _partProgressMap[partNumber] = 1.0;
           _sentPartToServerCount++;
           notifySendProgress();
           notifyProgress();
@@ -187,11 +199,17 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
     );
 
     controller
-      // UploadPartTask 一次上传一个 chunk，通知一次进度
+      // 子任务请求体次级切片后，dio 会按 sub-chunk 频率触发本回调，
+      // percent ∈ [0, 1] 表示当前分片自身的发送进度。
+      // 这里把"本片 percent 相对上次的增量"累加到 [_sentPartCount]，
+      // 让外层进度具备分片内细粒度。retry 检测：percent 比上次小说明回到 0 重发，
+      // 先回滚上一轮的累计，再用新值累加（仅依赖 percent 单调性，不依赖 task.isRetrying）。
       ..addSendProgressListener((percent) {
-        if (!task.isRetrying) {
-          _sentPartCount++;
-        }
+        final last = _partProgressMap[partNumber] ?? 0.0;
+        // delta 正常情况下为正（percent 单调递增）；retry 时 dio 会从 0 重新累计，
+        // delta 为负，相当于自动回滚上一轮的累计，再用新 percent 重新累加。
+        _sentPartCount += percent - last;
+        _partProgressMap[partNumber] = percent;
         notifySendProgress();
       })
       // UploadPartTask 上传完成后触发

@@ -24,7 +24,7 @@ import './config.dart';
 class Storage {
   /// Storage
   Storage({Config? config})
-      : _baseStorage = qiniu_sdk_base.Storage(config: config ?? Config());
+    : _baseStorage = qiniu_sdk_base.Storage(config: config ?? Config());
 
   final qiniu_sdk_base.Storage _baseStorage;
 

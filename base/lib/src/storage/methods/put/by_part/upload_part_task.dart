@@ -1,5 +1,30 @@
 part of 'put_parts_task.dart';
 
+/// 分片上传请求体的"次级切片"大小（字节）。
+///
+/// 单个分片通常 4MB 起步，如果作为一整段 `Stream.value(bytes)` 喂给 dio，
+/// 底层 IOSink 只会触发一次 pause/resume，导致 [QiniuHttpClient] 的写阶段
+/// 闲时超时（pause-driven）粒度过粗——一片真实传输 20s 才会 resume 一次。
+///
+/// 这里再切成 256KB 的小段串流，IOSink 会逐段 pause/resume，
+/// 闲时超时探测的时间粒度恢复到「写不动 256KB 就报警」的层级。
+/// 与 [QiniuHttpClient.sendBufferSize] 默认值（256KB）匹配：每片刚好填满一次内核
+/// send buffer，IOSink 每片 1 次 pause/resume，避免双重限流导致 TCP 拥塞窗口塌陷，
+/// 同时也避免 microtask round-trip 过多影响吞吐。
+const int _kUploadPartChunkBytes = 256 * 1024;
+
+/// 把整段 bytes 按 [chunkSize] 切成多个 chunk，通过 `async*` 串成 Stream。
+///
+/// 关键：`async*` 函数受订阅 pause/resume 控制，下游一旦 pause 就不会再 yield，
+/// 这正是 pause-driven 写超时所需的语义。
+Stream<List<int>> _chunkedStream(List<int> bytes, int chunkSize) async* {
+  for (var offset = 0; offset < bytes.length; offset += chunkSize) {
+    final end = (offset + chunkSize < bytes.length) ? offset + chunkSize : bytes.length;
+    // Uint8List 走 sublistView 零拷贝（共享底层 buffer），普通 List<int> 才 sublist。
+    yield bytes is Uint8List ? Uint8List.sublistView(bytes, offset, end) : bytes.sublist(offset, end);
+  }
+}
+
 // 上传一个 part 的任务
 class UploadPartTask extends RequestTask<UploadPart> {
   final String token;
@@ -61,12 +86,11 @@ class UploadPartTask extends RequestTask<UploadPart> {
     );
 
     final encodedKey = key != null ? base64Url.encode(utf8.encode(key!)) : '~';
-    final paramUrl =
-        '$host/buckets/$bucket/objects/$encodedKey/uploads/$uploadId/$partNumber';
+    final paramUrl = '$host/buckets/$bucket/objects/$encodedKey/uploads/$uploadId/$partNumber';
 
     final response = await client.put<Map<String, dynamic>>(
       paramUrl,
-      data: Stream.value(bytes),
+      data: _chunkedStream(bytes, _kUploadPartChunkBytes),
       // 在 data 是 stream 的场景下， interceptor 传入 cancelToken 这里不传会有 bug
       cancelToken: controller?.cancelToken,
       options: Options(
