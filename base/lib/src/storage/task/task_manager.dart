@@ -9,7 +9,7 @@ class TaskManager {
   ///
   /// 被添加的 [task] 会被立即执行 [createTask]
   @mustCallSuper
-  void addTask(Task task) async {
+  Future<void> addTask(Task task) async {
     try {
       task.manager = this;
       await task.preStart();
@@ -41,7 +41,7 @@ class TaskManager {
   }
 
   @mustCallSuper
-  void restartTask(Task task) async {
+  Future<void> restartTask(Task task) async {
     try {
       task.preRestart();
     } catch (e) {

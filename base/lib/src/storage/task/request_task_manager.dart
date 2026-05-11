@@ -72,13 +72,13 @@ class RequestTaskManager extends TaskManager {
   });
 
   @override
-  void addTask(covariant RequestTask task) {
+  Future<void> addTask(covariant RequestTask task) async {
     task.config = Config(
       hostProvider: _HostProvider(config.hostProvider),
       cacheProvider: config.cacheProvider,
       httpClientAdapter: config.httpClientAdapter,
       retryLimit: config.retryLimit,
     );
-    super.addTask(task);
+    await super.addTask(task);
   }
 }

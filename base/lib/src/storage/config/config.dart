@@ -7,7 +7,8 @@ import 'package:crypto/crypto.dart';
 import 'package:convert/convert.dart';
 import 'package:platform_info/platform_info.dart';
 import 'package:qiniu_sdk_base/src/storage/storage.dart';
-import 'package:qiniu_sdk_base/src/util/cache_provider_base.dart' as cache_provider;
+import 'package:qiniu_sdk_base/src/util/cache_provider_base.dart'
+    as cache_provider;
 import 'package:singleflight/singleflight.dart' as singleflight;
 import 'package:path/path.dart' show join;
 
@@ -34,7 +35,7 @@ class Config {
     this.retryLimit = 10,
   })  : hostProvider = hostProvider ?? DefaultHostProviderV2(),
         cacheProvider = cacheProvider ?? DefaultCacheProvider(),
-        httpClientAdapter = httpClientAdapter ?? StorageHttpClientAdapter();
+        httpClientAdapter = httpClientAdapter ?? QiniuHttpClient();
 
   Future<String> get appUserAgent async => '';
 }
