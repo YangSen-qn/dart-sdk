@@ -57,9 +57,7 @@ class PutBySingleTask extends RequestTask<PutResponse> {
 
     final multipartFile = MultipartFile.fromStream(
       () {
-        return resource
-            .getStream()
-            .expand((data) => chunkList(data, 64 * 1024));
+        return resource.getStream().expand((data) => chunkList(data, 64 * 1024));
       },
       resource.length,
       // 与其他 sdk 保持一致，没有 filename 就是问号

@@ -154,8 +154,7 @@ abstract class RequestTask<T> extends Task<T> {
   // 自定义发送进度处理逻辑
   void onSendProgress(double percent) {
     controller?.notifySendProgressListeners(percent);
-    controller
-        ?.notifyProgressListeners(percent * onSendProgressTakePercentOfTotal);
+    controller?.notifyProgressListeners(percent * onSendProgressTakePercentOfTotal);
   }
 
   bool _checkIfNeedRetry(DioException error) {
@@ -200,9 +199,7 @@ abstract class RequestTask<T> extends Task<T> {
             default:
             // do nothing
           }
-        case DioExceptionType.connectionError ||
-              DioExceptionType.connectionTimeout ||
-              DioExceptionType.badCertificate:
+        case DioExceptionType.connectionError || DioExceptionType.connectionTimeout || DioExceptionType.badCertificate:
           return true;
         default:
         // do nothing
@@ -213,8 +210,7 @@ abstract class RequestTask<T> extends Task<T> {
   }
 
   void checkResponse(Response response) {
-    if (response.headers['x-reqid'] == null &&
-        response.headers['x-log'] == null) {
+    if (response.headers['x-reqid'] == null && response.headers['x-log'] == null) {
       throw DioException.connectionError(
         requestOptions: response.requestOptions,
         reason: 'response might be malicious',

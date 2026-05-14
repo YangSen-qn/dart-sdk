@@ -11,7 +11,7 @@ part of 'put_parts_task.dart';
 /// 与 [QiniuHttpClient.sendBufferSize] 默认值（256KB）匹配：每片刚好填满一次内核
 /// send buffer，IOSink 每片 1 次 pause/resume，避免双重限流导致 TCP 拥塞窗口塌陷，
 /// 同时也避免 microtask round-trip 过多影响吞吐。
-const int _kUploadPartChunkBytes = 256 * 1024;
+const int _kUploadPartChunkBytes = 64 * 1024;
 
 /// 把整段 bytes 按 [chunkSize] 切成多个 chunk，通过 `async*` 串成 Stream。
 ///
@@ -64,12 +64,6 @@ class UploadPartTask extends RequestTask<UploadPart> {
   }
 
   @override
-  void postReceive(data) {
-    controller?.notifyProgressListeners(1);
-    super.postReceive(data);
-  }
-
-  @override
   Future<UploadPart> createTask() async {
     final headers = <String, dynamic>{
       'Authorization': 'UpToken $token',
@@ -101,16 +95,6 @@ class UploadPartTask extends RequestTask<UploadPart> {
     checkResponse(response);
 
     return UploadPart.fromJson(response.data!);
-  }
-
-  // 分片上传是手动从 File 拿一段数据大概 4m(直穿是直接从 File 里面读取)
-  // 如果文件是 21m，假设切片是 4 * 5
-  // 外部进度的话会导致一下长到 90% 多，然后变成 100%
-  // 解决方法是覆盖父类的 onSendProgress，让 onSendProgress 不处理 Progress 的进度
-  // 改为发送成功后通知(见 postReceive)
-  @override
-  void onSendProgress(double percent) {
-    controller?.notifySendProgressListeners(percent);
   }
 }
 

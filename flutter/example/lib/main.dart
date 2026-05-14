@@ -49,7 +49,7 @@ class BaseState extends State<Base> with DisposableState {
   int partSize = 4;
 
   // 用户输入的 token
-  String? token = 'dxVQk8gyk3WswArbNhdKIwmwibJ9nFsQhMNUmtIM:f6DEHgthHG7NGxkT6KMkQd8NTM4=:eyJzY29wZSI6InRlc3QteXMiLCJkZWFkbGluZSI6MTc3ODU4NTg1Mn0=';
+  String? token = 'dxVQk8gyk3WswArbNhdKIwmwibJ9nFsQhMNUmtIM:ubM2cnz2wv56A2Lj4bGq_Z0L6t0=:eyJzY29wZSI6InRlc3QteXMiLCJkZWFkbGluZSI6MTc3ODc0OTI0M30=';
 
   /// 当前选择的文件
   PlatformFile? selectedFile;
@@ -110,12 +110,7 @@ class BaseState extends State<Base> with DisposableState {
 
     printToConsole('开始上传文件');
 
-    final putOptions = PutOptions(
-      key: key,
-      mimeType: mimeType,
-      partSize: partSize,
-      controller: putController,
-    );
+    final putOptions = PutOptions(key: key, mimeType: mimeType, partSize: partSize, controller: putController, forceBySingle: false, maxPartsRequestNumber: 3);
 
     final upload = kIsWeb
         ? storage.putBytes(selectedFile!.bytes!, usedToken, options: putOptions)
@@ -125,12 +120,17 @@ class BaseState extends State<Base> with DisposableState {
             options: putOptions,
           );
 
+    final startTime = DateTime.now();
     upload
       ..then((PutResponse response) {
+        final duration = DateTime.now().difference(startTime);
+        printToConsole('上传成功，耗时: ${duration.inMilliseconds} 毫秒 速度： ${humanizeFileSize(selectedFile!.size * 1000 / duration.inMilliseconds.toDouble())}/s');
         printToConsole('上传已完成: 原始响应数据: ${jsonEncode(response.rawData)}');
         printToConsole('------------------------');
       })
       ..catchError((dynamic error) {
+        final duration = DateTime.now().difference(startTime);
+        printToConsole('上传失败，耗时: ${duration.inMilliseconds} 毫秒');
         if (error is StorageError) {
           switch (error.type) {
             case StorageErrorType.CONNECT_TIMEOUT:
@@ -165,7 +165,7 @@ class BaseState extends State<Base> with DisposableState {
           printToConsole('发生错误: ${error.toString()}');
         }
 
-        printToConsole('------------------------');
+        printToConsole('-----------上传结束-------------');
         return PutResponse.fromJson({'error': error});
       });
   }

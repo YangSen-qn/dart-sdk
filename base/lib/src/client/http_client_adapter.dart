@@ -9,9 +9,11 @@ import 'package:dio/io.dart';
 ///
 /// 在 dio 默认的 [HttpClientAdapter] 之上补充：
 /// - 连接超时 [connectTimeout]
-/// - 请求体闲时超时 [writeTimeout]
-/// - 等待响应头闲时超时（与 [readTimeout] 共用时长）
-/// - 响应体闲时超时 [readTimeout]
+/// - 请求体闲时超时 [writeTimeout]（pause-driven，监测 socket 写不动）
+/// - 响应体闲时超时 [readTimeout]（data-driven，监测 socket 不再来数据）
+///
+/// "请求体发完到响应头到达"之间这段不再做应用层检测，
+/// 交给 OS TCP 重传超时（macOS/iOS ~18s，errno=60）兜底。
 class QiniuHttpClient implements HttpClientAdapter {
   /// TCP 连接建立超时
   ///
@@ -32,11 +34,11 @@ class QiniuHttpClient implements HttpClientAdapter {
 
   /// 读取闲时超时，类似 socket 的 SO_RCVTIMEO
   ///
-  /// 包含两个阶段的闲时检测，两者共用该时长：
-  /// 1. 请求体发送完毕 → 响应头到达：等待服务端响应期间网络断开的检测；
-  /// 2. 响应体两次数据流动之间：响应传输过程中网络中断、服务端卡住的检测。
+  /// 响应体两次数据流动之间的最大等待时间：响应传输过程中网络中断、
+  /// 服务端卡住等情况下兜底取消请求。默认 30 秒。
   ///
-  /// 默认 30 秒。超时后触发 [TimeoutException]。
+  /// 注意：此超时不覆盖"请求体发完到响应头到达"之间的等待，
+  /// 该阶段无应用层信号可用，依赖 OS TCP 重传超时兜底。
   final Duration readTimeout;
 
   /// TCP 发送缓冲区大小（字节），默认 256KB
@@ -62,7 +64,7 @@ class QiniuHttpClient implements HttpClientAdapter {
     this.connectTimeout = const Duration(seconds: 10),
     this.writeTimeout = const Duration(seconds: 30),
     this.readTimeout = const Duration(seconds: 30),
-    this.sendBufferSize = 256 * 1024,
+    this.sendBufferSize = 128 * 1024,
     HttpClientAdapter? delegate,
   }) : _delegate = delegate ?? _buildDefaultAdapter(sendBufferSize);
 
@@ -163,42 +165,17 @@ class QiniuHttpClient implements HttpClientAdapter {
       if (!timeoutRace.isCompleted) timeoutRace.completeError(err, st);
     }
 
-    // 等待响应头阶段的 idle 检测（请求体发完之后到 fetch 返回之间）
-    Timer? awaitingHeaderTimer;
-
-    void armAwaitingHeaderTimer() {
-      if (readTimeout <= Duration.zero) return;
-      awaitingHeaderTimer?.cancel();
-      awaitingHeaderTimer = Timer(readTimeout, () {
-        fireIdleTimeout(
-          TimeoutException(
-            'Idle timeout waiting for response headers',
-            readTimeout,
-          ),
-          StackTrace.current,
-        );
-      });
-    }
-
-    void disarmAwaitingHeaderTimer() {
-      awaitingHeaderTimer?.cancel();
-      awaitingHeaderTimer = null;
-    }
-
-    Stream<Uint8List>? wrappedRequest;
-    if (requestStream != null) {
-      // 阶段 1：请求体推送（writeTimeout 计 idle，pause-driven 语义）；
-      // 阶段 1 结束（请求体 onDone）后立即进入阶段 2（armAwaitingHeaderTimer）。
-      wrappedRequest = _WriteIdleTimeoutStream(
-        requestStream,
-        writeTimeout,
-        onConsumedDone: armAwaitingHeaderTimer,
-        onIdleTimeout: fireIdleTimeout,
-      );
-    } else {
-      // 没有请求体，从一开始就进入等待响应头阶段
-      armAwaitingHeaderTimer();
-    }
+    // 仅覆盖请求体推送阶段（writeTimeout，pause-driven）；
+    // "请求体发完到响应头到达"之间的网络异常不再由我们检测，
+    // 交由 OS TCP 重传超时（macOS/iOS ~18s，errno=60）兜底，
+    // 一旦响应体开始有数据到达再切换到 readTimeout（data-driven）。
+    final wrappedRequest = requestStream != null
+        ? _WriteIdleTimeoutStream(
+            requestStream,
+            writeTimeout,
+            onIdleTimeout: fireIdleTimeout,
+          )
+        : null;
 
     final ResponseBody response;
     try {
@@ -214,18 +191,17 @@ class QiniuHttpClient implements HttpClientAdapter {
     } catch (e) {
       print('[DIAG] fetch threw $e at ${DateTime.now()}');
       rethrow;
-    } finally {
-      disarmAwaitingHeaderTimer();
     }
 
+    final responseStream = readTimeout > Duration.zero
+        ? _ReadIdleTimeoutStream(
+            response.stream,
+            readTimeout,
+            onIdleTimeout: fireIdleTimeout,
+          )
+        : response.stream;
     return ResponseBody(
-      readTimeout > Duration.zero
-          ? _ReadIdleTimeoutStream(
-              response.stream,
-              readTimeout,
-              onIdleTimeout: fireIdleTimeout,
-            )
-          : response.stream,
+      responseStream,
       response.statusCode,
       statusMessage: response.statusMessage,
       headers: response.headers,
@@ -321,7 +297,6 @@ abstract class _IdleTimeoutSubscriptionBase implements StreamSubscription<Uint8L
     Function? onError,
     void Function()? onDone,
     bool? cancelOnError,
-    void Function()? onConsumedDone,
   ) {
     _onData = onData;
     _onError = onError;
@@ -346,8 +321,6 @@ abstract class _IdleTimeoutSubscriptionBase implements StreamSubscription<Uint8L
         _finished = true;
         _cancelTimer();
         _onDone?.call();
-        // 源被完整消费后回调（用于切换至等待响应头阶段）
-        onConsumedDone?.call();
       },
       cancelOnError: cancelOnError,
     );
@@ -453,17 +426,14 @@ abstract class _IdleTimeoutSubscriptionBase implements StreamSubscription<Uint8L
 class _WriteIdleTimeoutStream extends Stream<Uint8List> {
   final Stream<Uint8List> _source;
   final Duration _idleTimeout;
-  final void Function()? _onConsumedDone;
   final _IdleTimeoutCallback? _onIdleTimeout;
   bool _listened = false;
 
   _WriteIdleTimeoutStream(
     this._source,
     this._idleTimeout, {
-    void Function()? onConsumedDone,
     _IdleTimeoutCallback? onIdleTimeout,
-  })  : _onConsumedDone = onConsumedDone,
-        _onIdleTimeout = onIdleTimeout;
+  }) : _onIdleTimeout = onIdleTimeout;
 
   @override
   bool get isBroadcast => false;
@@ -482,7 +452,7 @@ class _WriteIdleTimeoutStream extends Stream<Uint8List> {
     }
     _listened = true;
     final sub = _WriteIdleSubscription(_idleTimeout, _onIdleTimeout);
-    sub._bind(_source, onData, onError, onDone, cancelOnError, _onConsumedDone);
+    sub._bind(_source, onData, onError, onDone, cancelOnError);
     return sub;
   }
 }
@@ -544,7 +514,7 @@ class _ReadIdleTimeoutStream extends Stream<Uint8List> {
     }
     _listened = true;
     final sub = _ReadIdleSubscription(_idleTimeout, _onIdleTimeout);
-    sub._bind(_source, onData, onError, onDone, cancelOnError, null);
+    sub._bind(_source, onData, onError, onDone, cancelOnError);
     return sub;
   }
 }

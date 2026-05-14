@@ -11,7 +11,7 @@ class FileResource extends Resource {
     required super.length,
     super.name,
     super.partSize,
-  }) : id = 'path_${file.path}_size_${file.lengthSync()}';
+  }) : id = 'path_${file.path}_lastmodified_${file.lastModifiedSync()}';
 
   late StreamController<List<int>> _controller;
 
