@@ -34,16 +34,16 @@ class PutBySingleTask extends RequestTask<PutResponse> {
   }
 
   @override
-  void postReceive(data) {
-    super.postReceive(data);
-    resource.close();
+  Future<void> postReceive(data) async {
+    await super.postReceive(data);
+    await resource.close();
   }
 
   @override
-  void postError(error) {
-    super.postError(error);
+  Future<void> postError(error) async {
+    await super.postError(error);
     if (!isRetrying) {
-      resource.close();
+      await resource.close();
     }
   }
 
@@ -57,7 +57,9 @@ class PutBySingleTask extends RequestTask<PutResponse> {
 
     final multipartFile = MultipartFile.fromStream(
       () {
-        return resource.getStream().expand((data) => chunkList(data, 64 * 1024));
+        return resource
+            .getStream()
+            .expand((data) => chunkList(data, 64 * 1024));
       },
       resource.length,
       // 与其他 sdk 保持一致，没有 filename 就是问号

@@ -92,7 +92,8 @@ void main() {
       );
       final data = Uint8List.fromList([1, 2, 3]);
 
-      final response = await client.fetch(RequestOptions(), Stream.value(data), null);
+      final response =
+          await client.fetch(RequestOptions(), Stream.value(data), null);
       final received = <Uint8List>[];
       await for (final chunk in response.stream) {
         received.add(chunk);

@@ -1,6 +1,10 @@
 part of 'request_task.dart';
 
-class RequestTaskController with RequestTaskProgressListenersMixin, StorageStatusListenersMixin, RequestTaskSendProgressListenersMixin {
+class RequestTaskController
+    with
+        RequestTaskProgressListenersMixin,
+        StorageStatusListenersMixin,
+        RequestTaskSendProgressListenersMixin {
   final CancelToken cancelToken = CancelToken();
 
   /// 是否被取消过

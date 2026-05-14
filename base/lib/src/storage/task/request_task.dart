@@ -26,7 +26,7 @@ abstract class RequestTask<T> extends Task<T> {
   int retryCount = 0;
 
   // 最大重试次数
-  int retryLimit = 10;
+  int retryLimit = 2;
 
   bool _isRetrying = false;
   bool get isRetrying => _isRetrying;
@@ -72,34 +72,34 @@ abstract class RequestTask<T> extends Task<T> {
       ),
     );
 
-    super.preStart();
+    await super.preStart();
   }
 
   @override
   @mustCallSuper
-  void preRestart() {
+  Future<void> preRestart() async {
     _isRetrying = retryCount <= retryLimit && retryCount > 0;
     controller?.notifyStatusListeners(StorageStatus.Retry);
-    super.preRestart();
+    await super.preRestart();
   }
 
   @override
   @mustCallSuper
-  void postReceive(T data) {
+  Future<void> postReceive(T data) async {
     controller?.notifyStatusListeners(StorageStatus.Success);
     controller?.notifyProgressListeners(postReceiveTakePercentOfTotal);
-    super.postReceive(data);
+    await super.postReceive(data);
   }
 
   /// [createTask] 被取消后触发
   @mustCallSuper
-  void postCancel(StorageError error) {
+  Future<void> postCancel(StorageError error) async {
     controller?.notifyStatusListeners(StorageStatus.Cancel);
   }
 
   @override
   @mustCallSuper
-  void postError(Object error) async {
+  Future<void> postError(Object error) async {
     // 处理 Dio 异常
     if (error is DioException) {
       if (_checkIfNeedRetry(error)) {
@@ -109,7 +109,7 @@ abstract class RequestTask<T> extends Task<T> {
         if (retryCount < retryLimit) {
           retryCount++;
           // TODO 这里也许有优化空间，任务不应该自己重启自己，而应该通过消息或者报错告诉负责这个任务的管理者去重试
-          manager.restartTask(this);
+          await manager.restartTask(this);
           return;
         }
       }
@@ -118,24 +118,24 @@ abstract class RequestTask<T> extends Task<T> {
 
       // 通知状态
       if (error.type == DioExceptionType.cancel) {
-        postCancel(storageError);
+        await postCancel(storageError);
       } else {
         controller?.notifyStatusListeners(StorageStatus.Error);
       }
 
-      super.postError(storageError);
+      await super.postError(storageError);
       return;
     }
 
     // 处理 Storage 异常。如果有子任务，错误可能被子任务加工成 StorageError
     if (error is StorageError) {
       if (error.type == StorageErrorType.CANCEL) {
-        postCancel(error);
+        await postCancel(error);
       } else {
         controller?.notifyStatusListeners(StorageStatus.Error);
       }
 
-      super.postError(error);
+      await super.postError(error);
       return;
     }
 
@@ -143,18 +143,19 @@ abstract class RequestTask<T> extends Task<T> {
     if (error is Error) {
       controller?.notifyStatusListeners(StorageStatus.Error);
       final storageError = StorageError.fromError(error);
-      super.postError(storageError);
+      await super.postError(storageError);
       return;
     }
 
     controller?.notifyStatusListeners(StorageStatus.Error);
-    super.postError(error);
+    await super.postError(error);
   }
 
   // 自定义发送进度处理逻辑
   void onSendProgress(double percent) {
     controller?.notifySendProgressListeners(percent);
-    controller?.notifyProgressListeners(percent * onSendProgressTakePercentOfTotal);
+    controller
+        ?.notifyProgressListeners(percent * onSendProgressTakePercentOfTotal);
   }
 
   bool _checkIfNeedRetry(DioException error) {
@@ -199,7 +200,9 @@ abstract class RequestTask<T> extends Task<T> {
             default:
             // do nothing
           }
-        case DioExceptionType.connectionError || DioExceptionType.connectionTimeout || DioExceptionType.badCertificate:
+        case DioExceptionType.connectionError ||
+              DioExceptionType.connectionTimeout ||
+              DioExceptionType.badCertificate:
           return true;
         default:
         // do nothing
@@ -210,7 +213,8 @@ abstract class RequestTask<T> extends Task<T> {
   }
 
   void checkResponse(Response response) {
-    if (response.headers['x-reqid'] == null && response.headers['x-log'] == null) {
+    if (response.headers['x-reqid'] == null &&
+        response.headers['x-log'] == null) {
       throw DioException.connectionError(
         requestOptions: response.requestOptions,
         reason: 'response might be malicious',

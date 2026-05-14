@@ -46,10 +46,11 @@ class BaseState extends State<Base> with DisposableState {
   String? mimeType;
 
   // 用户输入的 partSize
-  int partSize = 4;
+  int partSize = 1;
 
   // 用户输入的 token
-  String? token = 'dxVQk8gyk3WswArbNhdKIwmwibJ9nFsQhMNUmtIM:ubM2cnz2wv56A2Lj4bGq_Z0L6t0=:eyJzY29wZSI6InRlc3QteXMiLCJkZWFkbGluZSI6MTc3ODc0OTI0M30=';
+  String? token =
+      'dxVQk8gyk3WswArbNhdKIwmwibJ9nFsQhMNUmtIM:Swlty9ftOepBTpV5QFAeE4TousY=:eyJzY29wZSI6InRlc3QteXMiLCJkZWFkbGluZSI6MTc3ODc2NDU1N30=';
 
   /// 当前选择的文件
   PlatformFile? selectedFile;
@@ -110,7 +111,13 @@ class BaseState extends State<Base> with DisposableState {
 
     printToConsole('开始上传文件');
 
-    final putOptions = PutOptions(key: key, mimeType: mimeType, partSize: partSize, controller: putController, forceBySingle: false, maxPartsRequestNumber: 3);
+    final putOptions = PutOptions(
+        key: key,
+        mimeType: mimeType,
+        partSize: partSize,
+        controller: putController,
+        forceBySingle: false,
+        maxPartsRequestNumber: 3);
 
     final upload = kIsWeb
         ? storage.putBytes(selectedFile!.bytes!, usedToken, options: putOptions)
@@ -124,7 +131,8 @@ class BaseState extends State<Base> with DisposableState {
     upload
       ..then((PutResponse response) {
         final duration = DateTime.now().difference(startTime);
-        printToConsole('上传成功，耗时: ${duration.inMilliseconds} 毫秒 速度： ${humanizeFileSize(selectedFile!.size * 1000 / duration.inMilliseconds.toDouble())}/s');
+        printToConsole(
+            '上传成功，耗时: ${duration.inMilliseconds} 毫秒 速度： ${humanizeFileSize(selectedFile!.size * 1000 / duration.inMilliseconds.toDouble())}/s');
         printToConsole('上传已完成: 原始响应数据: ${jsonEncode(response.rawData)}');
         printToConsole('------------------------');
       })
@@ -248,7 +256,8 @@ class BaseState extends State<Base> with DisposableState {
         ),
         Padding(
           padding: const EdgeInsets.all(8.0),
-          child: StringInput(onChanged: onKeyChange, label: '请输入 Key（可选）', value: 'Dart-Text'),
+          child: StringInput(
+              onChanged: onKeyChange, label: '请输入 Key（可选）', value: 'Dart-Text'),
         ),
         Padding(
           padding: const EdgeInsets.all(8.0),

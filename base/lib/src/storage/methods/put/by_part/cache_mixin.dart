@@ -10,7 +10,7 @@ mixin CacheMixin<T> on RequestTask<T> {
     await config.cacheProvider.removeItem(_cacheKey);
   }
 
-  Future setCache(String data) async {
+  Future<void> setCache(String data) async {
     await config.cacheProvider.setItem(_cacheKey, data);
   }
 

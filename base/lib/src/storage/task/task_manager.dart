@@ -13,54 +13,31 @@ class TaskManager {
     try {
       task.manager = this;
       await task.preStart();
-    } catch (e) {
-      task.postError(e);
-      return;
-    }
 
-    workingTasks.add(task);
+      workingTasks.add(task);
 
-    try {
-      task.postReceive(await task.createTask());
+      final taskFuture = task.createTask();
+      await task.postStart();
+      await task.postReceive(await taskFuture);
     } catch (error) {
-      task.postError(error);
-      return;
-    }
-
-    try {
-      task.postStart();
-    } catch (e) {
-      task.postError(e);
-      return;
+      await task.postError(error);
     }
   }
 
   @mustCallSuper
-  void removeTask(Task task) {
+  Future<void> removeTask(Task task) async {
     workingTasks.remove(task);
   }
 
   @mustCallSuper
   Future<void> restartTask(Task task) async {
     try {
-      task.preRestart();
-    } catch (e) {
-      task.postError(e);
-      return;
-    }
-
-    try {
-      task.postReceive(await task.createTask());
+      await task.preRestart();
+      final taskFuture = task.createTask();
+      await task.postRestart();
+      await task.postReceive(taskFuture);
     } catch (error) {
-      task.postError(error);
-      return;
-    }
-
-    try {
-      task.postRestart();
-    } catch (e) {
-      task.postError(e);
-      return;
+      await task.postError(error);
     }
   }
 

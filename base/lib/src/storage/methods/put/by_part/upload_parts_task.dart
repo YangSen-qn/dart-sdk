@@ -70,17 +70,17 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
     });
     _idleRequestNumber = maxPartsRequestNumber;
     _totalPartCount = (resource.length / resource.chunkSize).ceil();
-    _cacheKey = getCacheKey(resource.id, resource.length, resource.name);
+    _cacheKey = getCacheKey(resource.id, partSize, resource.name);
   }
 
   @override
-  void postError(Object error) {
-    super.postError(error);
+  Future<void> postError(Object error) async {
+    await super.postError(error);
     // 取消，网络问题等可能导致上传中断，缓存已上传的分片信息
-    storeUploadedPart();
+    await storeUploadedPart().catchError((_) {});
   }
 
-  Future storeUploadedPart() async {
+  Future<void> storeUploadedPart() async {
     if (_uploadedPartMap.isEmpty) {
       return;
     }
@@ -89,23 +89,20 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
   }
 
   // 从缓存恢复已经上传的 part
-  Future recoverUploadedPart() async {
-    // 获取缓存
+  Future<void> recoverUploadedPart() async {
     final cachedData = await getCache();
-    // 尝试从缓存恢复
-    if (cachedData != null) {
-      var cachedList = <Part>[];
+    if (cachedData == null) return;
 
-      try {
-        final cachedList0 = json.decode(cachedData) as List<dynamic>;
-        cachedList = cachedList0.map((dynamic item) => Part.fromJson(item as Map<String, dynamic>)).toList();
-      } catch (error) {
-        rethrow;
-      }
+    try {
+      final cachedList = (json.decode(cachedData) as List<dynamic>)
+          .map((dynamic item) => Part.fromJson(item as Map<String, dynamic>))
+          .toList();
 
       for (final part in cachedList) {
         _uploadedPartMap[part.partNumber] = part;
       }
+    } catch (_) {
+      // 缓存数据损坏，按无缓存处理
     }
   }
 
@@ -131,9 +128,11 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
   // 从指定的分片位置往后上传切片
   Future<void> _uploadParts() async {
     final taskFutures = <Future<void>>[];
-    final tasksLength = min(_idleRequestNumber, _totalPartCount - _uploadingPartIndex);
+    final tasksLength =
+        min(_idleRequestNumber, _totalPartCount - _uploadingPartIndex);
 
-    while (taskFutures.length < tasksLength && _uploadingPartIndex < _totalPartCount) {
+    while (taskFutures.length < tasksLength &&
+        _uploadingPartIndex < _totalPartCount) {
       // partNumber 按照后端要求必须从 1 开始
       final partNumber = ++_uploadingPartIndex;
 
@@ -147,7 +146,8 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
         if (uploadedPart != null) {
           partProgress.percent = 1.0;
         } else {
-          final future = _createUploadPartTaskFutureByPartNumber(bytes, partNumber);
+          final future =
+              _createUploadPartTaskFutureByPartNumber(bytes, partNumber);
           taskFutures.add(future);
         }
         _partProgressMap[partNumber] = partProgress;
@@ -194,7 +194,8 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
     final data = await task.future;
 
     _idleRequestNumber++;
-    _uploadedPartMap[partNumber] = Part(partNumber: partNumber, etag: data.etag);
+    _uploadedPartMap[partNumber] =
+        Part(partNumber: partNumber, etag: data.etag);
     _workingUploadPartTaskControllers.remove(controller);
     final partProgress = _partProgressMap[partNumber];
     if (partProgress != null) {
@@ -216,7 +217,9 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
     for (final partProgress in _partProgressMap.values) {
       sentBytes += partProgress.sentSize;
     }
-    final percent = resource.length > 0 ? sentBytes.toDouble() / resource.length.toDouble() : 0;
+    final percent = resource.length > 0
+        ? sentBytes.toDouble() / resource.length.toDouble()
+        : 0;
     onSendProgress(percent.toDouble());
   }
 }

@@ -19,9 +19,12 @@ const int _kUploadPartChunkBytes = 64 * 1024;
 /// 这正是 pause-driven 写超时所需的语义。
 Stream<List<int>> _chunkedStream(List<int> bytes, int chunkSize) async* {
   for (var offset = 0; offset < bytes.length; offset += chunkSize) {
-    final end = (offset + chunkSize < bytes.length) ? offset + chunkSize : bytes.length;
+    final end =
+        (offset + chunkSize < bytes.length) ? offset + chunkSize : bytes.length;
     // Uint8List 走 sublistView 零拷贝（共享底层 buffer），普通 List<int> 才 sublist。
-    yield bytes is Uint8List ? Uint8List.sublistView(bytes, offset, end) : bytes.sublist(offset, end);
+    yield bytes is Uint8List
+        ? Uint8List.sublistView(bytes, offset, end)
+        : bytes.sublist(offset, end);
   }
 }
 
@@ -80,7 +83,8 @@ class UploadPartTask extends RequestTask<UploadPart> {
     );
 
     final encodedKey = key != null ? base64Url.encode(utf8.encode(key!)) : '~';
-    final paramUrl = '$host/buckets/$bucket/objects/$encodedKey/uploads/$uploadId/$partNumber';
+    final paramUrl =
+        '$host/buckets/$bucket/objects/$encodedKey/uploads/$uploadId/$partNumber';
 
     final response = await client.put<Map<String, dynamic>>(
       paramUrl,

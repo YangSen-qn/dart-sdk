@@ -58,16 +58,16 @@ class PutByPartTask extends RequestTask<PutResponse> {
   }
 
   @override
-  void postReceive(PutResponse data) {
-    super.postReceive(data);
+  Future<void> postReceive(PutResponse data) async {
+    await super.postReceive(data);
     _currentWorkingTaskController = null;
-    resource.close();
+    await resource.close();
   }
 
   @override
-  void postError(Object error) {
-    super.postError(error);
-    resource.close();
+  Future<void> postError(Object error) async {
+    await super.postError(error);
+    await resource.close();
   }
 
   @override

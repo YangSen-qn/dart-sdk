@@ -89,8 +89,12 @@ class QiniuHttpClient implements HttpClientAdapter {
             final isDirectHttps = uri.isScheme('https') && proxyHost == null;
             final host = proxyHost ?? uri.host;
             final port = proxyPort ?? uri.port;
-            print('[DIAG] connectionFactory: $host:$port isDirectHttps=$isDirectHttps sndbuf=$sendBufferSize');
-            final ConnectionTask<Socket> task = isDirectHttps ? await SecureSocket.startConnect(host, port) : await Socket.startConnect(host, port);
+            print(
+              '[DIAG] connectionFactory: $host:$port isDirectHttps=$isDirectHttps sndbuf=$sendBufferSize',
+            );
+            final ConnectionTask<Socket> task = isDirectHttps
+                ? await SecureSocket.startConnect(host, port)
+                : await Socket.startConnect(host, port);
             // 关键时序：此处的 then 比 HttpClient 的 `await task.socket` 先注册，
             // 微任务按注册顺序执行，因此 setRawOption 在 HttpClient 拿到 socket
             // 准备写第一个字节之前生效。
@@ -103,7 +107,9 @@ class QiniuHttpClient implements HttpClientAdapter {
                 );
                 final view = ByteData.sublistView(actual);
                 final got = view.getUint32(0, Endian.host);
-                print('[DIAG] setRawOption SO_SNDBUF set=$sendBufferSize got=$got');
+                print(
+                  '[DIAG] setRawOption SO_SNDBUF set=$sendBufferSize got=$got',
+                );
               } catch (e) {
                 print('[DIAG] setRawOption failed: $e');
               }
@@ -179,7 +185,8 @@ class QiniuHttpClient implements HttpClientAdapter {
 
     final ResponseBody response;
     try {
-      final fetchFuture = _delegate.fetch(options, wrappedRequest, mergedCancel);
+      final fetchFuture =
+          _delegate.fetch(options, wrappedRequest, mergedCancel);
       // 任一 idle 超时触发，timeoutRace 先于 fetch 完成，Future.any 把 TimeoutException
       // 抛出来。底层 fetchFuture 因为 localCancel → abort 也会随后 reject，
       // Future.any 内部会静默处理掉这条迟到的失败，不会留下未处理错误。
@@ -187,7 +194,9 @@ class QiniuHttpClient implements HttpClientAdapter {
         fetchFuture,
         timeoutRace.future,
       ]);
-      print('[DIAG] fetch got response status=${response.statusCode} at ${DateTime.now()}');
+      print(
+        '[DIAG] fetch got response status=${response.statusCode} at ${DateTime.now()}',
+      );
     } catch (e) {
       print('[DIAG] fetch threw $e at ${DateTime.now()}');
       rethrow;
@@ -215,7 +224,10 @@ class QiniuHttpClient implements HttpClientAdapter {
   }
 
   /// 合并两个取消 future，任一完成即视为取消
-  Future<void> _mergeCancelFuture(Future<void>? external, Future<void> internal) {
+  Future<void> _mergeCancelFuture(
+    Future<void>? external,
+    Future<void> internal,
+  ) {
     if (external == null) return internal;
     final c = Completer<void>();
     void complete() {
@@ -229,7 +241,10 @@ class QiniuHttpClient implements HttpClientAdapter {
 }
 
 /// 闲时超时回调签名
-typedef _IdleTimeoutCallback = void Function(TimeoutException err, StackTrace st);
+typedef _IdleTimeoutCallback = void Function(
+  TimeoutException err,
+  StackTrace st,
+);
 
 // ---------------------------------------------------------------------------
 // 闲时超时检测：两种语义
@@ -258,7 +273,8 @@ typedef _IdleTimeoutCallback = void Function(TimeoutException err, StackTrace st
 //
 // 单订阅语义：每个 Stream 实例只能 listen 一次。
 
-abstract class _IdleTimeoutSubscriptionBase implements StreamSubscription<Uint8List> {
+abstract class _IdleTimeoutSubscriptionBase
+    implements StreamSubscription<Uint8List> {
   final Duration _idleTimeout;
 
   /// 闲时超时时通知外层（用于触发底层 abort）
@@ -277,7 +293,8 @@ abstract class _IdleTimeoutSubscriptionBase implements StreamSubscription<Uint8L
   bool _finished = false;
   bool _canceled = false;
 
-  _IdleTimeoutSubscriptionBase(this._idleTimeout, this._onIdleTimeout) : _listenStack = StackTrace.current;
+  _IdleTimeoutSubscriptionBase(this._idleTimeout, this._onIdleTimeout)
+      : _listenStack = StackTrace.current;
 
   /// 子类钩子：每次源吐出数据时回调（早于消费者 onData）
   void _onSourceData();
@@ -416,7 +433,8 @@ abstract class _IdleTimeoutSubscriptionBase implements StreamSubscription<Uint8L
   }
 
   @override
-  Future<E> asFuture<E>([E? futureValue]) => _source?.asFuture<E>(futureValue) ?? Future<E>.value(futureValue as E);
+  Future<E> asFuture<E>([E? futureValue]) =>
+      _source?.asFuture<E>(futureValue) ?? Future<E>.value(futureValue as E);
 }
 
 /// 写阶段闲时超时：pause-driven。

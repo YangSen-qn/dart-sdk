@@ -28,25 +28,25 @@ abstract class Task<T> {
 
   /// [createTask] 执行之后会调用
   @mustCallSuper
-  void postStart() {}
+  Future<void> postStart() async {}
 
   /// 在 [createTask] 的返回值接收到结果之后调用
   @mustCallSuper
-  void postReceive(T data) {
-    manager.removeTask(this);
+  Future<void> postReceive(T data) async {
+    await manager.removeTask(this);
     completer.complete(data);
   }
 
   /// 在 [createTask] 的返回值出错之后调用
   @mustCallSuper
-  void postError(Object error) {
-    manager.removeTask(this);
+  Future<void> postError(Object error) async {
+    await manager.removeTask(this);
     completer.completeError(error);
   }
 
   /// Task 被重启之前执行，[Task.restart] 调用后立即执行
-  void preRestart() {}
+  Future<void> preRestart() async {}
 
   /// Task 被重启之后执行，[createTask] 被重新调用后执行
-  void postRestart() {}
+  Future<void> postRestart() async {}
 }
