@@ -11,16 +11,20 @@ class TaskManager {
   @mustCallSuper
   Future<void> addTask(Task task) async {
     try {
-      task.manager = this;
       await task.preStart();
-
       workingTasks.add(task);
-
       final taskFuture = task.createTask();
       await task.postStart();
-      await task.postReceive(await taskFuture);
+
+      final result = await taskFuture;
+      await task.postReceive(result);
     } catch (error) {
-      await task.postError(error);
+      if (task.showRetry(error)) {
+        await task.postError(error, complete: false);
+        await restartTask(task);
+      } else {
+        await task.postError(error, complete: true);
+      }
     }
   }
 
@@ -34,10 +38,18 @@ class TaskManager {
     try {
       await task.preRestart();
       final taskFuture = task.createTask();
+      workingTasks.add(task);
       await task.postRestart();
-      await task.postReceive(taskFuture);
+
+      final result = await taskFuture;
+      await task.postReceive(result);
     } catch (error) {
-      await task.postError(error);
+      if (task.showRetry(error)) {
+        await task.postError(error, complete: false);
+        await restartTask(task);
+      } else {
+        await task.postError(error, complete: true);
+      }
     }
   }
 

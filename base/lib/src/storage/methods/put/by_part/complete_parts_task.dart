@@ -16,6 +16,7 @@ class CompletePartsTask extends RequestTask<PutResponse> {
   final Map<String, String>? customVars;
 
   CompletePartsTask({
+    required Config config,
     required this.token,
     required this.uploadId,
     required this.parts,
@@ -25,7 +26,7 @@ class CompletePartsTask extends RequestTask<PutResponse> {
     PutController? controller,
     this.accelerateUploading = false,
     this.regionIndex = 0,
-  }) : super(controller: controller);
+  }) : super(config, controller: controller);
 
   @override
   Future<void> preStart() async {

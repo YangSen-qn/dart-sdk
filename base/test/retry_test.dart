@@ -74,7 +74,7 @@ void main() {
       final statusList = <StorageStatus>[];
       // 设置一个假的初始化缓存，让分片上传跳过初始化文件，便于测试后面的上传文件流程
       await cacheProvider.setItem(
-        InitPartsTask.getCacheKey(resource.id, null),
+        InitPartsTask.getCacheKey(0, resource.id, null),
         json.encode({'expireAt': 0, 'uploadId': '0'}),
       );
       final future = storage.putFile(
@@ -154,6 +154,7 @@ void main() {
       // 重试阶段会发生在 InitPartsTask 调用 getUpHost 的时候
       // 手动初始化一个用于测试
       final task = InitPartsTask(
+        config: config,
         token: token,
         resource: resource,
         key: key,

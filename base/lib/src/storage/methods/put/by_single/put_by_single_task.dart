@@ -21,11 +21,12 @@ class PutBySingleTask extends RequestTask<PutResponse> {
   late UpTokenInfo _tokenInfo;
 
   PutBySingleTask({
+    required Config config,
     required this.resource,
     required this.token,
     required this.options,
     required this.filename,
-  }) : super(controller: options.controller);
+  }) : super(config, controller: options.controller);
 
   @override
   Future<void> preStart() async {
@@ -35,24 +36,24 @@ class PutBySingleTask extends RequestTask<PutResponse> {
 
   @override
   Future<void> postReceive(data) async {
-    await super.postReceive(data);
     await resource.close();
+    await super.postReceive(data);
   }
 
   @override
-  Future<void> postError(error) async {
-    await super.postError(error);
-    if (!isRetrying) {
-      await resource.close();
-    }
+  Future<void> postError(error, {bool complete = false}) async {
+    await resource.close();
+    await super.postError(error, complete: complete);
+  }
+
+  @override
+  Future<void> preRestart() async {
+    await resource.close();
+    await super.preRestart();
   }
 
   @override
   Future<PutResponse> createTask() async {
-    if (isRetrying) {
-      // 单文件上传的重试需要从头开始传，所以先关了再开
-      await resource.close();
-    }
     await resource.open();
 
     final multipartFile = MultipartFile.fromStream(
@@ -71,7 +72,9 @@ class PutBySingleTask extends RequestTask<PutResponse> {
       'token': token,
     };
 
-    if (resource.name != null) {
+    if (options.key != null) {
+      formDataMap.addAll(<String, dynamic>{'key': options.key!});
+    } else if (resource.name != null) {
       formDataMap.addAll(<String, dynamic>{'key': resource.name});
     }
 

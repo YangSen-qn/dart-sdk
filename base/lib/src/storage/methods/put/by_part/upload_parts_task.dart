@@ -13,28 +13,35 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
   @override
   late final String _cacheKey;
 
-  /// 设置为 0，避免子任务重试失败后 [UploadPartsTask] 继续重试
-  @override
-  int get retryLimit => 0;
-
-  // 文件总共被拆分的分片数
+  /// 文件总共被拆分的分片数
   late final int _totalPartCount;
 
-  // 上传成功后把 part 信息存起来
+  /// 上传成功后把 part 信息存起来
   final Map<int, Part> _uploadedPartMap = {};
 
-  // 处理分片上传任务的 UploadPartTask 的控制器
-  final List<RequestTaskController> _workingUploadPartTaskControllers = [];
+  /// 处理分片上传任务的 UploadPartTask 的控制器
+  final List<RequestTaskController> _uploadPartTaskControllers = [];
+  final TaskManager _uploadPartTaskManager = TaskManager();
 
-  // 每个 partNumber 上次回调时的 percent，用于算 delta。
+  /// 每个 partNumber 上次回调时的 percent，用于算 delta。
   final Map<int, _PartProgress> _partProgressMap = {};
 
-  // 剩余多少被允许的请求数
+  /// 任一子任务失败时保存错误，用于取消其他运行中的子任务并阻止后续上传
+  Object? _error;
+
+  /// 剩余多少被允许的请求数
   late int _idleRequestNumber;
+
+  /// 当前正在上传的 partNumber，初始值为 0，上传第一片时会自增到 1，以此类推
+  int _uploadingPartIndex = 0;
+
+  /// 是否已经读完资源流了，读完了就不会再有新的分片需要上传了，防止开始计算的分片数和实际上传的分片数不一致导致死循环
+  bool _hasReadAllResourceStream = false;
 
   final Resource resource;
 
   UploadPartsTask({
+    required Config config,
     required this.token,
     required this.uploadId,
     required this.partSize,
@@ -43,20 +50,11 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
     PutController? controller,
     this.accelerateUploading = false,
     this.regionIndex = 0,
-  }) : super(controller: controller);
+  }) : super(config, controller: controller);
 
-  static String getCacheKey(
-    String resourceId,
-    int partSize,
-    String? key,
-  ) {
-    final keyList = [
-      'resource_id/$resourceId',
-      'key/$key',
-      'part_size/$partSize',
-    ];
-
-    return 'qiniu_dart_sdk_upload_parts_task@[${keyList..join("/")}]';
+  @override
+  bool showRetry(Object error) {
+    return false;
   }
 
   @override
@@ -64,20 +62,19 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
     await super.preStart();
     // 当前 controller 被取消后，所有运行中的子任务都需要被取消
     controller?.cancelToken.whenCancel.then((_) {
-      for (final controller in _workingUploadPartTaskControllers) {
-        controller.cancel();
-      }
+      cancelWorkingUploadPartTasks();
     });
+
     _idleRequestNumber = maxPartsRequestNumber;
     _totalPartCount = (resource.length / resource.chunkSize).ceil();
-    _cacheKey = getCacheKey(resource.id, partSize, resource.name);
-  }
-
-  @override
-  Future<void> postError(Object error) async {
-    await super.postError(error);
-    // 取消，网络问题等可能导致上传中断，缓存已上传的分片信息
-    await storeUploadedPart().catchError((_) {});
+    final keyList = [
+      'region/$regionIndex',
+      'resource_id/${resource.id}',
+      'upload_id/$uploadId',
+      'key/${resource.name}',
+      'part_size/$partSize',
+    ];
+    _cacheKey = 'qiniu_dart_sdk_upload_parts_task@[${keyList..join("/")}]';
   }
 
   Future<void> storeUploadedPart() async {
@@ -85,15 +82,19 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
       return;
     }
 
-    await setCache(jsonEncode(_uploadedPartMap.values.toList()));
+    try {
+      await setCache(jsonEncode(_uploadedPartMap.values.toList()));
+    } catch (_) {
+      /// 保存失败不影响正常流程，所以 catch 掉错误
+    }
   }
 
   // 从缓存恢复已经上传的 part
   Future<void> recoverUploadedPart() async {
-    final cachedData = await getCache();
-    if (cachedData == null) return;
-
     try {
+      final cachedData = await getCache();
+      if (cachedData == null) return;
+
       final cachedList = (json.decode(cachedData) as List<dynamic>)
           .map((dynamic item) => Part.fromJson(item as Map<String, dynamic>))
           .toList();
@@ -103,6 +104,12 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
       }
     } catch (_) {
       // 缓存数据损坏，按无缓存处理
+    }
+  }
+
+  void cancelWorkingUploadPartTasks() {
+    for (final controller in _uploadPartTaskControllers) {
+      controller.cancel();
     }
   }
 
@@ -123,11 +130,16 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
     return _uploadedPartMap.values.toList();
   }
 
-  int _uploadingPartIndex = 0;
-
   // 从指定的分片位置往后上传切片
   Future<void> _uploadParts() async {
+    // 其他子任务已失败，不再继续
+    if (_error != null) {
+      return;
+    }
+
     final taskFutures = <Future<void>>[];
+
+    /// 本次需要创建的任务个数 = min(剩余被允许的请求数, 总分片数 - 已经上传的分片数)
     final tasksLength =
         min(_idleRequestNumber, _totalPartCount - _uploadingPartIndex);
 
@@ -136,7 +148,10 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
       // partNumber 按照后端要求必须从 1 开始
       final partNumber = ++_uploadingPartIndex;
 
+      bool isReadStream = false;
       await for (final bytes in resource.stream) {
+        isReadStream = true;
+
         // 跳过上传过的分片
         final uploadedPart = _uploadedPartMap[partNumber];
         final partProgress = _PartProgress(
@@ -145,29 +160,70 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
         );
         if (uploadedPart != null) {
           partProgress.percent = 1.0;
+          notifyProgress();
         } else {
-          final future =
-              _createUploadPartTaskFutureByPartNumber(bytes, partNumber);
+          final future = _uploadPartByPartNumber(bytes, partNumber);
           taskFutures.add(future);
         }
         _partProgressMap[partNumber] = partProgress;
-        notifyProgress();
+        break;
+      }
+      if (!isReadStream) {
+        // 资源流已经读完了
+        _hasReadAllResourceStream = true;
         break;
       }
     }
 
-    await Future.wait<void>(taskFutures);
+    try {
+      await Future.wait<void>(taskFutures);
+
+      /// 检查任务是否已经完成
+      if (_uploadedPartMap.length == _totalPartCount) {
+        return;
+      }
+
+      /// 这不应该发生，说明有某些 part 上传了多次，或者上传了不该上传的 part
+      if (_uploadedPartMap.length > _totalPartCount) {
+        throw StorageError(
+            type: StorageErrorType.UNKNOWN,
+            message:
+                'Unexpected error: uploaded part count is greater than total part count');
+      }
+
+      /// 资源流已经读完了，但上传的数量小于读取时文件的数量
+      if (_hasReadAllResourceStream) {
+        throw StorageError(
+            type: StorageErrorType.UNKNOWN,
+            message:
+                'Unexpected error: all resource stream has been read but uploaded size is less than total size');
+      }
+
+      /// 上传下一片
+      await _uploadParts();
+    } catch (e) {
+      /// 有分片执行失败
+      /// 已经有其他分片失败了，不再重复设置错误状态
+      if (_error != null) {
+        return;
+      }
+
+      _error ??= e;
+      cancelWorkingUploadPartTasks();
+      rethrow;
+    }
   }
 
-  Future<void> _createUploadPartTaskFutureByPartNumber(
+  Future<void> _uploadPartByPartNumber(
     List<int> bytes,
     int partNumber,
   ) async {
     _idleRequestNumber--;
     final controller = PutController();
-    _workingUploadPartTaskControllers.add(controller);
+    _uploadPartTaskControllers.add(controller);
 
     final task = UploadPartTask(
+      config: config,
       token: token,
       bytes: bytes,
       uploadId: uploadId,
@@ -189,14 +245,14 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
       notifyProgress();
     });
 
-    manager.addTask(task);
-
+    _uploadPartTaskManager.addTask(task);
     final data = await task.future;
+    _uploadPartTaskManager.removeTask(task);
 
     _idleRequestNumber++;
     _uploadedPartMap[partNumber] =
         Part(partNumber: partNumber, etag: data.etag);
-    _workingUploadPartTaskControllers.remove(controller);
+    _uploadPartTaskControllers.remove(controller);
     final partProgress = _partProgressMap[partNumber];
     if (partProgress != null) {
       partProgress.percent = 1.0;
@@ -204,12 +260,6 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
     notifyProgress();
 
     await storeUploadedPart();
-
-    // 检查任务是否已经完成
-    if (_uploadedPartMap.length != _totalPartCount) {
-      // 上传下一片
-      await _uploadParts();
-    }
   }
 
   void notifyProgress() {

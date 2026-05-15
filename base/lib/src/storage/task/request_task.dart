@@ -15,11 +15,9 @@ abstract class RequestTask<T> extends Task<T> {
 
   final Dio client = Dio();
 
-  /// [RequestTaskManager.addTask] 会初始化这个
-  late final Config config;
-  @override
-  // ignore: overridden_fields
-  covariant late final RequestTaskManager manager;
+  final Config config;
+
+  /// 任务控制器，可以用于取消任务、获取上述的状态，进度等信息
   final RequestTaskController? controller;
 
   // 重试次数
@@ -28,10 +26,15 @@ abstract class RequestTask<T> extends Task<T> {
   // 最大重试次数
   int retryLimit = 2;
 
-  bool _isRetrying = false;
-  bool get isRetrying => _isRetrying;
+  Object? _lastError;
 
-  RequestTask({this.controller});
+  RequestTask(Config config, {this.controller})
+      : config = Config(
+          hostProvider: _HostProvider(config.hostProvider),
+          cacheProvider: config.cacheProvider,
+          httpClientAdapter: config.httpClientAdapter,
+          retryLimit: config.retryLimit,
+        );
 
   @override
   @mustCallSuper
@@ -78,7 +81,7 @@ abstract class RequestTask<T> extends Task<T> {
   @override
   @mustCallSuper
   Future<void> preRestart() async {
-    _isRetrying = retryCount <= retryLimit && retryCount > 0;
+    retryCount++;
     controller?.notifyStatusListeners(StorageStatus.Retry);
     await super.preRestart();
   }
@@ -99,56 +102,48 @@ abstract class RequestTask<T> extends Task<T> {
 
   @override
   @mustCallSuper
-  Future<void> postError(Object error) async {
-    // 处理 Dio 异常
+  Future<void> postError(Object error, {bool complete = false}) async {
+    Object postError = error;
+    StorageStatus newStatus = StorageStatus.Error;
+
     if (error is DioException) {
-      if (_checkIfNeedRetry(error)) {
-        if (_isHostUnavailable(error)) {
-          config.hostProvider.freezeHost(error.requestOptions.path);
-        }
-        if (retryCount < retryLimit) {
-          retryCount++;
-          // TODO 这里也许有优化空间，任务不应该自己重启自己，而应该通过消息或者报错告诉负责这个任务的管理者去重试
-          await manager.restartTask(this);
-          return;
-        }
+      /// 处理 Dio 异常
+      if (_isHostUnavailable(error)) {
+        config.hostProvider.freezeHost(error.requestOptions.path);
       }
 
-      final storageError = StorageError.fromDioError(error);
+      postError = StorageError.fromDioError(error);
 
-      // 通知状态
+      /// 通知状态
       if (error.type == DioExceptionType.cancel) {
-        await postCancel(storageError);
-      } else {
-        controller?.notifyStatusListeners(StorageStatus.Error);
+        newStatus = StorageStatus.Cancel;
       }
-
-      await super.postError(storageError);
-      return;
-    }
-
-    // 处理 Storage 异常。如果有子任务，错误可能被子任务加工成 StorageError
-    if (error is StorageError) {
+    } else if (error is StorageError) {
+      /// 处理 Storage 异常。如果有子任务，错误可能被子任务加工成 StorageError
       if (error.type == StorageErrorType.CANCEL) {
-        await postCancel(error);
-      } else {
-        controller?.notifyStatusListeners(StorageStatus.Error);
+        newStatus = StorageStatus.Cancel;
       }
 
-      await super.postError(error);
-      return;
+      /// 这个错误不应该被外界感知到
+      if (error.type == StorageErrorType.NO_AVAILABLE_HOST) {
+        if (_lastError != null) {
+          postError = _lastError!;
+        }
+        // 避免上层重试
+        retryCount = retryLimit;
+      }
+    } else if (error is Error) {
+      // 不能处理的异常
+      postError = StorageError.fromError(error);
     }
 
-    // 不能处理的异常
-    if (error is Error) {
-      controller?.notifyStatusListeners(StorageStatus.Error);
-      final storageError = StorageError.fromError(error);
-      await super.postError(storageError);
-      return;
+    if (complete) {
+      /// 整个任务完全结束后才会更新任务错误状态
+      controller?.notifyStatusListeners(newStatus);
     }
 
-    controller?.notifyStatusListeners(StorageStatus.Error);
-    await super.postError(error);
+    _lastError = postError;
+    await super.postError(postError, complete: complete);
   }
 
   // 自定义发送进度处理逻辑
@@ -156,6 +151,17 @@ abstract class RequestTask<T> extends Task<T> {
     controller?.notifySendProgressListeners(percent);
     controller
         ?.notifyProgressListeners(percent * onSendProgressTakePercentOfTotal);
+  }
+
+  @override
+  bool showRetry(Object error) {
+    if (error is! DioException) {
+      return false;
+    }
+    if (!_checkIfNeedRetry(error)) {
+      return false;
+    }
+    return retryCount < retryLimit;
   }
 
   bool _checkIfNeedRetry(DioException error) {
@@ -220,5 +226,69 @@ abstract class RequestTask<T> extends Task<T> {
         reason: 'response might be malicious',
       );
     }
+  }
+}
+
+/// HostProvider 的包装类，提供首次请求失败时的重试逻辑
+///
+/// 当第一次获取上传域名时，如果所有域名都被冻结导致失败，
+/// 此包装器会自动解冻一个域名并重试一次。
+class _HostProvider extends HostProvider {
+  final HostProvider _hostprovider;
+
+  bool _hasGetUpHost = false;
+
+  _HostProvider(this._hostprovider);
+
+  @override
+  Future<String> getUpHost({
+    required String accessKey,
+    required String bucket,
+    bool accelerateUploading = false,
+    bool transregional = false,
+    int regionIndex = 0,
+  }) async {
+    var retryCount = 0;
+    while (true) {
+      try {
+        final host = await _hostprovider.getUpHost(
+          accessKey: accessKey,
+          bucket: bucket,
+          accelerateUploading: accelerateUploading,
+          transregional: transregional,
+          regionIndex: regionIndex,
+        );
+        _hasGetUpHost = true;
+        return host;
+      } on StorageError catch (error) {
+        if (_hasGetUpHost) {
+          rethrow;
+        }
+        if (error.type != StorageErrorType.NO_AVAILABLE_HOST) {
+          rethrow;
+        }
+        if (retryCount >= 3) {
+          rethrow;
+        }
+        // 如果第一次获取上传域名就失败，尝试解冻一个上传域名后重试一次
+        _hostprovider.unfreezeOne();
+        retryCount++;
+      }
+    }
+  }
+
+  @override
+  void freezeHost(String host) {
+    _hostprovider.freezeHost(host);
+  }
+
+  @override
+  bool isFrozen(String host) {
+    return _hostprovider.isFrozen(host);
+  }
+
+  @override
+  void unfreezeOne() {
+    _hostprovider.unfreezeOne();
   }
 }

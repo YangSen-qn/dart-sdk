@@ -48,6 +48,7 @@ class UploadPartTask extends RequestTask<UploadPart> {
   late final UpTokenInfo _tokenInfo;
 
   UploadPartTask({
+    required Config config,
     required this.token,
     required this.bytes,
     required this.uploadId,
@@ -58,7 +59,7 @@ class UploadPartTask extends RequestTask<UploadPart> {
     PutController? controller,
     this.accelerateUploading = false,
     this.regionIndex = 0,
-  }) : super(controller: controller);
+  }) : super(config, controller: controller);
 
   @override
   Future<void> preStart() async {

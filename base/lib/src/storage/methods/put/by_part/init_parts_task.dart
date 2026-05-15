@@ -38,16 +38,18 @@ class InitPartsTask extends RequestTask<InitParts> with CacheMixin<InitParts> {
   late final UpTokenInfo _tokenInfo;
 
   InitPartsTask({
+    required Config config,
     required this.resource,
     required this.token,
     this.key,
     PutController? controller,
     this.accelerateUploading = false,
     this.regionIndex = 0,
-  }) : super(controller: controller);
+  }) : super(config, controller: controller);
 
-  static String getCacheKey(String resourceId, String? key) {
+  static String getCacheKey(int regionIndex, String resourceId, String? key) {
     final keyList = [
+      'region/$regionIndex',
       'resource_id/$resourceId',
       'key/$key',
     ];
@@ -57,7 +59,7 @@ class InitPartsTask extends RequestTask<InitParts> with CacheMixin<InitParts> {
   @override
   Future<void> preStart() async {
     _tokenInfo = Auth.parseUpToken(token);
-    _cacheKey = InitPartsTask.getCacheKey(resource.id, key);
+    _cacheKey = InitPartsTask.getCacheKey(regionIndex, resource.id, key);
     await super.preStart();
   }
 

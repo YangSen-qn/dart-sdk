@@ -11,9 +11,6 @@ export 'task_manager.dart';
 ///
 /// 异步的任务，比如请求，批处理都可以继承这个类实现一个 Task
 abstract class Task<T> {
-  /// 被添加到 [TaskManager] 后初始化
-  late final TaskManager manager;
-
   @protected
   Completer<T> completer = Completer();
 
@@ -33,15 +30,20 @@ abstract class Task<T> {
   /// 在 [createTask] 的返回值接收到结果之后调用
   @mustCallSuper
   Future<void> postReceive(T data) async {
-    await manager.removeTask(this);
     completer.complete(data);
   }
 
   /// 在 [createTask] 的返回值出错之后调用
   @mustCallSuper
-  Future<void> postError(Object error) async {
-    await manager.removeTask(this);
-    completer.completeError(error);
+  Future<void> postError(Object error, {bool complete = true}) async {
+    if (complete) {
+      completer.completeError(error);
+    }
+  }
+
+  /// 是否需要重试，默认不重试
+  bool showRetry(Object error) {
+    return false;
   }
 
   /// Task 被重启之前执行，[Task.restart] 调用后立即执行

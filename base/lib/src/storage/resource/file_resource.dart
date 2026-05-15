@@ -1,11 +1,19 @@
 part of 'resource.dart';
 
 class FileResource extends Resource {
+  /// 通过文件创建一个 [FileResource]，会把文件的路径、大小、修改时间等信息作为 id 的一部分，以区分不同的文件资源
   late RandomAccessFile raf;
+
+  /// 由于 [FileResource] 的特殊性，在文件读取过程中可能会有 close 操作，这时不能直接在 [close] 里关闭 raf，否则可能会和正在进行的 read 操作冲突，所以等待读取完毕后再关闭 raf
   List<RandomAccessFile> waitingForCloseRafs = [];
+
+  /// 文件资源
   final File file;
+
+  /// 通过 [File] 创建一个 [FileResource]，会把文件的路径、大小、修改时间等信息作为 id 的一部分，以区分不同的文件资源
   @override
   final String id;
+
   FileResource({
     required this.file,
     required super.length,
