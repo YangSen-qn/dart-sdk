@@ -2,9 +2,8 @@ import 'dart:async';
 
 import 'package:meta/meta.dart';
 
-import '../../../qiniu_sdk_base.dart';
-
 export 'request_task.dart';
+export 'request_task_controller.dart';
 export 'task_manager.dart';
 
 /// 定义一个 Task 的抽象类
@@ -18,6 +17,10 @@ abstract class Task<T> {
 
   /// 创建任务的抽象方法
   Future<T> createTask();
+
+  String taskID() {
+    return hashCode.toString();
+  }
 
   /// [Task] 启动之前会调用，该方法只会在第一次被 [TaskManager] 初始化的时候调用
   @mustCallSuper

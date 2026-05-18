@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:crypto/crypto.dart';
 import 'package:convert/convert.dart';
 import 'package:platform_info/platform_info.dart';
+import 'package:qiniu_sdk_base/src/client/http_client_adapter.dart';
 import 'package:qiniu_sdk_base/src/storage/storage.dart';
 import 'package:qiniu_sdk_base/src/util/cache_provider_base.dart'
     as cache_provider;

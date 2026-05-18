@@ -5,7 +5,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:qiniu_flutter_sdk/qiniu_flutter_sdk.dart';
-import 'package:qiniu_sdk_base/src/util/user_agent/user_agent.dart';
 
 import 'utils/uint.dart';
 import 'widgets/app.dart';
@@ -50,7 +49,7 @@ class BaseState extends State<Base> with DisposableState {
 
   // 用户输入的 token
   String? token =
-      'dxVQk8gyk3WswArbNhdKIwmwibJ9nFsQhMNUmtIM:nI6JBj9uHarNZhgq79TQSxC0sxE=:eyJzY29wZSI6InRlc3QteXMiLCJkZWFkbGluZSI6MTc3ODg1MjEzMH0=';
+      'dxVQk8gyk3WswArbNhdKIwmwibJ9nFsQhMNUmtIM:Knmq9wMimSOcA1WLca0mG8gsLeY=:eyJzY29wZSI6InRlc3QteXMiLCJkZWFkbGluZSI6MTc3OTEwMjU1OH0=';
 
   /// 当前选择的文件
   PlatformFile? selectedFile;
@@ -155,6 +154,9 @@ class BaseState extends State<Base> with DisposableState {
               break;
             case StorageErrorType.CANCEL:
               printToConsole('发生错误: 请求取消');
+              break;
+            case StorageErrorType.RESOURCE_READ_EXCEPTION:
+              printToConsole('发生错误: 资源读取异常');
               break;
             case StorageErrorType.UNKNOWN:
               printToConsole('发生错误: 未知错误');
@@ -297,20 +299,7 @@ class BaseState extends State<Base> with DisposableState {
           key: Key('console'),
           padding: EdgeInsets.all(8.0),
           child: Console(),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(20),
-          child: Row(
-            children: [
-              TextButton(
-                onPressed: () {
-                  printToConsole('成功获取上传UA: ${getDefaultUserAgent()}');
-                },
-                child: Text('获取UA'),
-              ),
-            ],
-          ),
-        ),
+        )
       ],
     );
   }

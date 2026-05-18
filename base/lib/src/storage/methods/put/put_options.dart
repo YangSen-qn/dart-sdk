@@ -19,7 +19,7 @@ class PutOptions {
   /// 使用分片上传时的分片大小，默认值 4，单位为 MB
   final int partSize;
 
-  /// 并发上传的队列长度，默认值为 2
+  /// 并发上传的队列长度，默认值为 3
   final int maxPartsRequestNumber;
 
   /// 自定义变量，key 必须以 x: 开始

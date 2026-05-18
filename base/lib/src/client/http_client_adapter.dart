@@ -52,10 +52,10 @@ class QiniuHttpClient implements HttpClientAdapter {
   /// 此时如果上层一次写入的分片大于内核缓冲（典型 4MB 分片场景），
   /// [writeTimeout] 会因 onDone 提前到达而失效。
   ///
-  /// 推荐 64 * 1024 ~ 1024 * 1024。
+  /// 推荐 128 * 1024 ~ 256 * 1024。
   /// 过小（如 32KB）会让 TCP 拥塞窗口拉不起来，影响吞吐；
   /// 过大（接近或超过分片大小）则失去触发 pause-driven idle 检测的作用。
-  /// 默认 256KB 与分片上传的次级切片大小匹配，每片正好填满一次发送缓冲。
+  /// 默认 128KB 与分片上传的次级切片大小匹配，每片正好填满一次发送缓冲。
   final int? sendBufferSize;
 
   final HttpClientAdapter _delegate;

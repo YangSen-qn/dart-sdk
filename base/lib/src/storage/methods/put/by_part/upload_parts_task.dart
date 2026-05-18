@@ -177,41 +177,53 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
 
     try {
       await Future.wait<void>(taskFutures);
-
-      /// 检查任务是否已经完成
-      if (_uploadedPartMap.length == _totalPartCount) {
-        return;
-      }
-
-      /// 这不应该发生，说明有某些 part 上传了多次，或者上传了不该上传的 part
-      if (_uploadedPartMap.length > _totalPartCount) {
-        throw StorageError(
-            type: StorageErrorType.UNKNOWN,
-            message:
-                'Unexpected error: uploaded part count is greater than total part count');
-      }
-
-      /// 资源流已经读完了，但上传的数量小于读取时文件的数量
-      if (_hasReadAllResourceStream) {
-        throw StorageError(
-            type: StorageErrorType.UNKNOWN,
-            message:
-                'Unexpected error: all resource stream has been read but uploaded size is less than total size');
-      }
-
-      /// 上传下一片
-      await _uploadParts();
     } catch (e) {
+      print('====== 1 Part upload error: $e ======');
+
       /// 有分片执行失败
       /// 已经有其他分片失败了，不再重复设置错误状态
       if (_error != null) {
+        print('====== 2 Part upload error: $_error ======');
         return;
       }
 
+      print('====== 3 Part upload error: $e ======');
+
       _error ??= e;
-      cancelWorkingUploadPartTasks();
+
+      if (e is StorageError && e.type != StorageErrorType.CANCEL) {
+        /// 取消正在执行的分片上传任务，取消错误从上往下传递，不需要在这里再次取消
+        cancelWorkingUploadPartTasks();
+      }
+
       rethrow;
     }
+
+    /// 检查任务是否已经完成
+    if (_uploadedPartMap.length == _totalPartCount) {
+      return;
+    }
+
+    /// 资源读取大于预期
+    if (_uploadedPartMap.length > _totalPartCount) {
+      throw StorageError(
+        type: StorageErrorType.RESOURCE_READ_EXCEPTION,
+        message:
+            'Unexpected error: uploaded part count is greater than total part count',
+      );
+    }
+
+    /// 资源读取少于预期
+    if (_hasReadAllResourceStream) {
+      throw StorageError(
+        type: StorageErrorType.RESOURCE_READ_EXCEPTION,
+        message:
+            'Unexpected error: all resource stream has been read but uploaded size is less than total size',
+      );
+    }
+
+    /// 上传下一片
+    await _uploadParts();
   }
 
   Future<void> _uploadPartByPartNumber(

@@ -1,4 +1,7 @@
-part of 'request_task.dart';
+import 'package:dio/dio.dart';
+import 'package:meta/meta.dart';
+
+import '../status/status.dart';
 
 class RequestTaskController
     with

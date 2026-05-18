@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:qiniu_sdk_base/qiniu_sdk_base.dart';
+import 'package:qiniu_sdk_base/src/storage/task/task_manager.dart';
 import 'package:qiniu_sdk_base/src/storage/methods/put/by_part/put_parts_task.dart';
 import 'package:qiniu_sdk_base/src/storage/resource/resource.dart';
 import 'package:test/test.dart';
@@ -161,7 +162,9 @@ void main() {
         controller: PutController()
           ..addStatusListener(initPartsTaskStatusList.add),
       );
-      storage.taskManager.addTask(task);
+      final tmpTaskManager = TaskManager();
+      tmpTaskManager.addTask(task);
+      await task.future;
 
       // 接下来是正常流程
       final putController = PutController();

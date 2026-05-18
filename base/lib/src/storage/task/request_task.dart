@@ -1,9 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:meta/meta.dart';
+import 'task.dart';
 import '../../../qiniu_sdk_base.dart';
 import '../../util/user_agent/user_agent.dart';
-part 'request_task_controller.dart';
-part 'request_task_manager.dart';
 
 abstract class RequestTask<T> extends Task<T> {
   // 准备阶段占总任务的百分比
@@ -158,22 +157,47 @@ abstract class RequestTask<T> extends Task<T> {
     if (error is! DioException) {
       return false;
     }
-    if (!_checkIfNeedRetry(error)) {
+    if (!isHostRetryableError(error)) {
       return false;
     }
     return retryCount < retryLimit;
   }
 
-  bool _checkIfNeedRetry(DioException error) {
+  @protected
+  bool isHostRetryableError(DioException error) {
     if (!_canConnectToHost(error) || _isHostUnavailable(error)) {
       return true;
     }
-    if (error.type == DioExceptionType.badResponse) {
-      if (error.response?.statusCode == 612) {
-        return true;
-      }
+    if (error.type != DioExceptionType.badResponse) {
+      return false;
+    }
+    return _isRetryableResponseCode(error.response?.statusCode);
+  }
+
+  @protected
+  bool isRegionRetryableError(StorageError error) {
+    if (!_canConnectToHost(error) || _isHostUnavailable(error)) {
+      return true;
+    }
+    if (_isRetryableResponseCode(error.code)) {
+      return true;
+    }
+    // upload
+    if (isCtxExpiedError(error.code)) {
+      return true;
     }
     return false;
+  }
+
+  @protected
+  bool isCtxExpiedError(int? statusCode) {
+    return statusCode == 701 || statusCode == 612;
+  }
+
+  bool _isRetryableResponseCode(int? code) {
+    // 只有 5xx 可以重试
+    final statusCode = code ?? 0;
+    return statusCode / 100 == 5 && statusCode != 573 && statusCode != 579;
   }
 
   // host 是否可以连接上

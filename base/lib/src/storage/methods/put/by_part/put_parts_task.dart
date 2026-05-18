@@ -6,7 +6,10 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 
 import '../../../../../qiniu_sdk_base.dart';
+import '../../../task/task_manager.dart';
 import '../../../resource/resource.dart';
+import '../../../task/request_task.dart';
+import '../../../task/request_task_controller.dart';
 
 part 'cache_mixin.dart';
 part 'complete_parts_task.dart';
@@ -21,7 +24,9 @@ class PutByPartTask extends RequestTask<PutResponse> {
   final Resource resource;
 
   final PutOptions options;
-  int regionIndex = 0;
+
+  /// 当前正在使用的区域索引
+  int _regionIndex = 0;
 
   /// 上次错误
   Object? _error;
@@ -39,18 +44,14 @@ class PutByPartTask extends RequestTask<PutResponse> {
   RequestTaskController? _currentWorkingTaskController;
 
   @override
+  String taskID() {
+    return resource.id;
+  }
+
+  @override
   Future<void> preStart() async {
     await super.preStart();
 
-    ///TODO： 处理相同任务
-    // final sameTaskExist = manager.getTasks().where((element) => element is PutByPartTask && isEquals(element)).isNotEmpty;
-
-    // if (sameTaskExist) {
-    //   throw StorageError(
-    //     type: StorageErrorType.IN_PROGRESS,
-    //     message: '$resource 已在上传队列中',
-    //   );
-    // }
     // controller 被取消后取消当前运行的子任务
     controller?.cancelToken.whenCancel.then((_) {
       _currentWorkingTaskController?.cancel();
@@ -94,7 +95,7 @@ class PutByPartTask extends RequestTask<PutResponse> {
     try {
       await resource.open();
 
-      initPartsTask = _createInitPartsTask(regionIndex);
+      initPartsTask = _createInitPartsTask(_regionIndex);
       taskManager.addTask(initPartsTask);
       _currentWorkingTaskController = initPartsTask.controller;
       initParts = await initPartsTask.future;
@@ -103,7 +104,7 @@ class PutByPartTask extends RequestTask<PutResponse> {
       controller?.notifyProgressListeners(0.002);
 
       uploadPartsTask = _createUploadPartsTask(
-        regionIndex,
+        _regionIndex,
         initParts.uploadId,
       );
       _currentWorkingTaskController = uploadPartsTask.controller;
@@ -111,7 +112,7 @@ class PutByPartTask extends RequestTask<PutResponse> {
 
       final parts = await uploadPartsTask.future;
       final completePartsTask = _createCompletePartsTask(
-        regionIndex,
+        _regionIndex,
         initParts.uploadId,
         parts,
       );
@@ -130,29 +131,34 @@ class PutByPartTask extends RequestTask<PutResponse> {
         rethrow;
       }
 
+      /// 满足以下两种情况清理缓存：
+      /// 1、如果服务端临时文件数据被删除了，清除本地缓存
+      /// 2、源读取异常，之前上传的数据无效
+      /// 不切换区域进行重试
+      if (isCtxExpiedError(error.code) ||
+          error.type == StorageErrorType.RESOURCE_READ_EXCEPTION) {
+        await initPartsTask?.clearCache();
+        await uploadPartsTask?.clearCache();
+        return Future.error(error);
+      }
+
       if (error.type == StorageErrorType.NO_AVAILABLE_REGION) {
         // 没有可用的区域了，停止重试
         shouldRetry = false;
         return Future.error(_error ?? error);
       }
 
-      /// 满足以下两种情况清理缓存：
-      /// 1、如果服务端文件被删除了，清除本地缓存
-      /// 2、如果 PartNumber 不符合要求，顺序不对等原因导致的参数不对(400)
-      /// 仅切换区域不用清理，缓存和区域相关
-      if (error.code == 400 || error.code == 612) {
-        await initPartsTask?.clearCache();
-        await uploadPartsTask?.clearCache();
+      if (error.type == StorageErrorType.CANCEL ||
+          !isRegionRetryableError(error)) {
+        // 没有可用的服务器了，停止重试
+        shouldRetry = false;
+        return Future.error(error);
       }
 
-      regionIndex += 1;
+      _regionIndex++;
       _error = error;
       rethrow;
     }
-  }
-
-  bool isEquals(PutByPartTask target) {
-    return target.resource.id == resource.id;
   }
 
   /// 初始化上传信息，分片上传的第一步
@@ -193,7 +199,10 @@ class PutByPartTask extends RequestTask<PutResponse> {
 
   /// 创建文件，分片上传的最后一步
   CompletePartsTask _createCompletePartsTask(
-      int regionIndex, String uploadId, List<Part> parts) {
+    int regionIndex,
+    String uploadId,
+    List<Part> parts,
+  ) {
     final controller = PutController();
     final task = CompletePartsTask(
       config: config,

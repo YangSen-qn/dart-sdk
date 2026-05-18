@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import '../../../../util/chunk_list.dart' show chunkList;
 import '../../../../../qiniu_sdk_base.dart';
 import '../../../resource/resource.dart';
+import '../../../task/request_task.dart';
 
 // 直传任务
 class PutBySingleTask extends RequestTask<PutResponse> {
@@ -27,6 +28,11 @@ class PutBySingleTask extends RequestTask<PutResponse> {
     required this.options,
     required this.filename,
   }) : super(config, controller: options.controller);
+
+  @override
+  String taskID() {
+    return resource.id;
+  }
 
   @override
   Future<void> preStart() async {

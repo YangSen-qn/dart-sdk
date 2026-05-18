@@ -27,6 +27,9 @@ enum StorageErrorType {
   /// 已在处理队列中
   IN_PROGRESS,
 
+  /// 资源读取异常
+  RESOURCE_READ_EXCEPTION,
+
   /// 未知或者不能处理的错误
   UNKNOWN,
 }
