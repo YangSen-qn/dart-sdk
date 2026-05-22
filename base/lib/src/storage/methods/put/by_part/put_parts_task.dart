@@ -32,7 +32,7 @@ class PutByPartTask extends RequestTask<PutResponse> {
   Object? _error;
 
   /// 是否应该重试，本任务只处理区域间的重试
-  bool shouldRetry = true;
+  bool _shouldRetry = true;
 
   PutByPartTask({
     required Config config,
@@ -81,7 +81,7 @@ class PutByPartTask extends RequestTask<PutResponse> {
 
   @override
   bool showRetry(Object error) {
-    return shouldRetry;
+    return _shouldRetry;
   }
 
   @override
@@ -127,7 +127,7 @@ class PutByPartTask extends RequestTask<PutResponse> {
     } catch (error) {
       if (error is! StorageError) {
         // 不是 StorageError，直接抛出
-        shouldRetry = false;
+        _shouldRetry = false;
         rethrow;
       }
 
@@ -144,14 +144,14 @@ class PutByPartTask extends RequestTask<PutResponse> {
 
       if (error.type == StorageErrorType.NO_AVAILABLE_REGION) {
         // 没有可用的区域了，停止重试
-        shouldRetry = false;
+        _shouldRetry = false;
         return Future.error(_error ?? error);
       }
 
       if (error.type == StorageErrorType.CANCEL ||
           !isRegionRetryableError(error)) {
         // 没有可用的服务器了，停止重试
-        shouldRetry = false;
+        _shouldRetry = false;
         return Future.error(error);
       }
 

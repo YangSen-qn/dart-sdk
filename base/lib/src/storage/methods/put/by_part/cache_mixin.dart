@@ -49,7 +49,7 @@ class _CacheItem {
         expireAt: cacheMap['expireAt'] as int,
       );
     } catch (e) {
-      // 解析失败说明缓存数据有问题，直接当做没有缓存
+      // 解析失败说明缓存数据有问题，直接当做过期缓存处理
       return _CacheItem('', expireAt: -1);
     }
   }

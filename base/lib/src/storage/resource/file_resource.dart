@@ -10,16 +10,14 @@ class FileResource extends Resource {
   /// 文件资源
   final File file;
 
-  /// 通过 [File] 创建一个 [FileResource]，会把文件的路径、大小、修改时间等信息作为 id 的一部分，以区分不同的文件资源
-  @override
-  final String id;
-
   FileResource({
     required this.file,
     required super.length,
     super.name,
     super.partSize,
-  }) : id = 'path_${file.path}_size_${file.lengthSync()}_mtime_${file.lastModifiedSync()}';
+  }) : super(
+          id: 'path_${file.path}_size_${file.lengthSync()}_mtime_${file.lastModifiedSync().millisecondsSinceEpoch}',
+        );
 
   late StreamController<List<int>> _controller;
 

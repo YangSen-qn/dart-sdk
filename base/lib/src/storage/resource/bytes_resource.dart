@@ -2,14 +2,13 @@ part of 'resource.dart';
 
 class BytesResource extends Resource {
   final List<int> bytes;
-  @override
-  final String id;
+
   BytesResource({
     required this.bytes,
     required super.length,
     super.name,
     super.partSize,
-  }) : id = md5.convert(bytes).toString();
+  }) : super(id: md5.convert(bytes).toString());
 
   late StreamController<List<int>> _controller;
 

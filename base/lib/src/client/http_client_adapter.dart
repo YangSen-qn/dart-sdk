@@ -1,9 +1,9 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
+
+import 'delegate_factory.dart';
 
 /// 七牛自定义 HTTP 客户端
 ///
@@ -30,6 +30,9 @@ class QiniuHttpClient implements HttpClientAdapter {
   ///
   /// 请求体流两次数据流动之间的最大等待时间，默认 30 秒。
   /// 超时后触发 [TimeoutException]。
+  ///
+  /// 仅在 Native 平台生效。Web 平台无 socket 背压机制，
+  /// 此超时不会触发，需依赖浏览器自身的网络超时。
   final Duration writeTimeout;
 
   /// 读取闲时超时，类似 socket 的 SO_RCVTIMEO
@@ -41,7 +44,7 @@ class QiniuHttpClient implements HttpClientAdapter {
   /// 该阶段无应用层信号可用，依赖 OS TCP 重传超时兜底。
   final Duration readTimeout;
 
-  /// TCP 发送缓冲区大小（字节），默认 256KB
+  /// TCP 发送缓冲区大小（字节），默认 128KB
   ///
   /// 设置后会通过 [Socket.setRawOption] 限制内核 send buffer 上限，
   /// 让大块数据无法一次写完，触发 IOSink 背压链路 pause 我们的 source，
@@ -52,10 +55,12 @@ class QiniuHttpClient implements HttpClientAdapter {
   /// 此时如果上层一次写入的分片大于内核缓冲（典型 4MB 分片场景），
   /// [writeTimeout] 会因 onDone 提前到达而失效。
   ///
-  /// 推荐 128 * 1024 ~ 256 * 1024。
-  /// 过小（如 32KB）会让 TCP 拥塞窗口拉不起来，影响吞吐；
-  /// 过大（接近或超过分片大小）则失去触发 pause-driven idle 检测的作用。
-  /// 默认 128KB 与分片上传的次级切片大小匹配，每片正好填满一次发送缓冲。
+  /// 仅在 Native 平台生效，Web 平台会忽略此参数。
+  ///
+  /// 推荐范围：128 * 1024（128KB）~ 256 * 1024（256KB）
+  /// - 过小（< 64KB）：TCP 拥塞窗口拉不起来，影响吞吐
+  /// - 过大（接近分片大小）：失去触发 pause-driven idle 检测的作用
+  /// - 默认 128KB 与分片上传的次级切片大小匹配，每片正好填满一次发送缓冲
   final int? sendBufferSize;
 
   final HttpClientAdapter _delegate;
@@ -66,82 +71,7 @@ class QiniuHttpClient implements HttpClientAdapter {
     this.readTimeout = const Duration(seconds: 30),
     this.sendBufferSize = 128 * 1024,
     HttpClientAdapter? delegate,
-  }) : _delegate = delegate ?? _buildDefaultAdapter(sendBufferSize);
-
-  /// 默认 delegate 工厂。
-  ///
-  /// 仅在调用方需要自定义 [sendBufferSize] 时构造带 connectionFactory 的
-  /// [IOHttpClientAdapter]；否则退回到 dio 默认 [HttpClientAdapter]，避免
-  /// 在 Web 等不支持 dart:io 的平台上引入硬依赖。
-  static HttpClientAdapter _buildDefaultAdapter(int? sendBufferSize) {
-    if (sendBufferSize == null) return HttpClientAdapter();
-    return IOHttpClientAdapter(
-      createHttpClient: () {
-        final client = HttpClient();
-        final option = _buildSndBufOption(sendBufferSize);
-        if (option != null) {
-          client.connectionFactory = (uri, proxyHost, proxyPort) async {
-            // 当设置了 connectionFactory，dart:io 的 HttpClient 不再自动做 TLS 升级
-            // （详见 sdk/lib/_http/http_impl.dart 中 cf != null 的分支），
-            // 因此必须由 factory 自身按 scheme/proxy 决定走 SecureSocket 还是 Socket。
-            // 仅在直连 https 时使用 SecureSocket；https + proxy 场景由 HttpClient
-            // 自己通过 CONNECT 隧道完成 TLS，这里只负责连到代理的明文 socket。
-            final isDirectHttps = uri.isScheme('https') && proxyHost == null;
-            final host = proxyHost ?? uri.host;
-            final port = proxyPort ?? uri.port;
-            print(
-              '[DIAG] connectionFactory: $host:$port isDirectHttps=$isDirectHttps sndbuf=$sendBufferSize',
-            );
-            final ConnectionTask<Socket> task = isDirectHttps
-                ? await SecureSocket.startConnect(host, port)
-                : await Socket.startConnect(host, port);
-            // 关键时序：此处的 then 比 HttpClient 的 `await task.socket` 先注册，
-            // 微任务按注册顺序执行，因此 setRawOption 在 HttpClient 拿到 socket
-            // 准备写第一个字节之前生效。
-            task.socket.then((socket) {
-              try {
-                socket.setRawOption(option);
-                // 读回内核实际生效值（OS 可能 round-up 或截断到上限）
-                final actual = socket.getRawOption(
-                  RawSocketOption(option.level, option.option, Uint8List(4)),
-                );
-                final view = ByteData.sublistView(actual);
-                final got = view.getUint32(0, Endian.host);
-                print(
-                  '[DIAG] setRawOption SO_SNDBUF set=$sendBufferSize got=$got',
-                );
-              } catch (e) {
-                print('[DIAG] setRawOption failed: $e');
-              }
-            });
-            return task;
-          };
-        }
-        return client;
-      },
-    );
-  }
-
-  /// 按平台构造 SO_SNDBUF 的 [RawSocketOption]。
-  ///
-  /// `level` 都是 `SOL_SOCKET`（dart:io 暴露为 [RawSocketOption.levelSocket]），
-  /// `optionName` 各 OS 不一致，必须按平台写死。
-  static RawSocketOption? _buildSndBufOption(int size) {
-    int? optionName;
-    if (Platform.isLinux || Platform.isAndroid || Platform.isFuchsia) {
-      optionName = 7; // SO_SNDBUF on Linux/Android
-    } else if (Platform.isMacOS || Platform.isIOS) {
-      optionName = 0x1001; // SO_SNDBUF on Darwin
-    } else if (Platform.isWindows) {
-      optionName = 0x1001; // SO_SNDBUF on Winsock
-    }
-    if (optionName == null) return null;
-    return RawSocketOption.fromInt(
-      RawSocketOption.levelSocket,
-      optionName,
-      size,
-    );
-  }
+  }) : _delegate = delegate ?? createDefaultDelegate(sendBufferSize);
 
   @override
   Future<ResponseBody> fetch(
@@ -149,7 +79,6 @@ class QiniuHttpClient implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
-    print('[DIAG] ${DateTime.now()} fetch ${options.uri} by ${options.method}');
     options.connectTimeout ??= connectTimeout;
 
     // 本地取消信号：任一 idle timeout 触发时 complete，dio 收到后会 abort 底层请求。
@@ -164,7 +93,6 @@ class QiniuHttpClient implements HttpClientAdapter {
     final timeoutRace = Completer<ResponseBody>();
 
     void fireIdleTimeout(TimeoutException err, StackTrace st) {
-      print('[DIAG] fireIdleTimeout at ${DateTime.now()}: $err');
       // 触发底层 abort，使 dio 的 addStream / response 链路自然终止
       if (!localCancel.isCompleted) localCancel.complete();
       // 给外层 await 一个明确的 TimeoutException
@@ -194,9 +122,6 @@ class QiniuHttpClient implements HttpClientAdapter {
         fetchFuture,
         timeoutRace.future,
       ]);
-      print(
-        '[DIAG] fetch got response status=${response.statusCode} at ${DateTime.now()}',
-      );
     } catch (e) {
       print('[DIAG] fetch threw $e at ${DateTime.now()}');
       rethrow;
@@ -321,7 +246,6 @@ abstract class _IdleTimeoutSubscriptionBase
 
     _source = source.listen(
       (data) {
-        print('[DIAG] data:${data.length} at ${DateTime.now()}');
         _onSourceData();
         if (_finished) return;
         // 经由可变字段读取最新 handler，支持订阅中途替换
@@ -408,14 +332,12 @@ abstract class _IdleTimeoutSubscriptionBase
 
   @override
   void pause([Future<void>? resumeSignal]) {
-    print('[DIAG] subscription.pause at ${DateTime.now()}');
     _onConsumerPause();
     _source?.pause(resumeSignal);
   }
 
   @override
   void resume() {
-    print('[DIAG] subscription.resume at ${DateTime.now()}');
     _onConsumerResume();
     _source?.resume();
   }
