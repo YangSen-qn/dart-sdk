@@ -50,9 +50,9 @@ class CompletePartsTask extends RequestTask<PutResponse> {
         '$host/buckets/$bucket/objects/$encodedKey/uploads/$uploadId';
 
     final data = <String, dynamic>{
-      'parts': parts
-        ..sort((a, b) => a.partNumber - b.partNumber)
-        ..map((part) => part.toJson()).toList(),
+      'parts': (parts..sort((a, b) => a.partNumber - b.partNumber))
+          .map((part) => part.toJson())
+          .toList(),
     };
 
     if (customVars != null) {

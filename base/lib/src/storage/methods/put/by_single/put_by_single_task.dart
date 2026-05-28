@@ -37,6 +37,10 @@ class PutBySingleTask extends RequestTask<PutResponse> {
   @override
   Future<void> preStart() async {
     _tokenInfo = Auth.parseUpToken(token);
+    // 顶层任务：重置进度基线，避免复用同一 Controller 发起第二次上传时
+    // 进度被 `percent <= _lastNotified...` 过滤掉。retry 路径（preRestart）
+    // 不调用，保持进度单调性。
+    controller?.resetProgressBaseline();
     await super.preStart();
   }
 

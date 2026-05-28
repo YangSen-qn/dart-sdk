@@ -21,6 +21,17 @@ class RequestTaskController
 
     cancelToken.cancel();
   }
+
+  /// 重置两个进度 mixin 的单调钳制基线。
+  ///
+  /// 仅在每个顶层任务 preStart() 时调用一次，保证 Controller 被复用发起
+  /// 第二次上传时进度回调不会被 `percent <= _lastNotified...` 过滤掉。
+  /// 内部 retry（preRestart）不得调用，以保持对外进度单调性。
+  @internal
+  void resetProgressBaseline() {
+    resetSendProgress();
+    resetProgress();
+  }
 }
 
 typedef RequestTaskSendProgressListener = void Function(double percent);
@@ -64,7 +75,7 @@ mixin RequestTaskSendProgressListenersMixin {
   ///
   /// 仅在 Controller 复用、需要重新跑一轮发送时调用；
   /// 单次任务（含内部 retry）不应调用，否则单调性失效。
-  @protected
+  @internal
   void resetSendProgress() {
     _lastNotifiedSendProgress = 0;
   }
@@ -101,7 +112,7 @@ mixin RequestTaskProgressListenersMixin {
   }
 
   /// 清空总体进度的单调钳制基线。详见 [RequestTaskSendProgressListenersMixin.resetSendProgress]。
-  @protected
+  @internal
   void resetProgress() {
     _lastNotifiedProgress = 0;
   }
@@ -127,7 +138,7 @@ mixin StorageStatusListenersMixin {
   }
 
   void notifyStatusListeners(StorageStatus status) {
-    status = status;
+    this.status = status;
     for (final listener in _statusListeners) {
       listener(status);
     }

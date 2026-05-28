@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -65,7 +66,7 @@ class Storage {
       );
     }
 
-    _taskManager.addTask(task);
+    unawaited(_taskManager.addTask(task));
 
     return task.future;
   }
@@ -110,7 +111,7 @@ class Storage {
       );
     }
 
-    _taskManager.addTask(task);
+    unawaited(_taskManager.addTask(task));
 
     return task.future;
   }

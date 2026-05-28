@@ -103,13 +103,15 @@ class QiniuHttpClient implements HttpClientAdapter {
     // "请求体发完到响应头到达"之间的网络异常不再由我们检测，
     // 交由 OS TCP 重传超时（macOS/iOS ~18s，errno=60）兜底，
     // 一旦响应体开始有数据到达再切换到 readTimeout（data-driven）。
-    final wrappedRequest = requestStream != null
+    // writeTimeout <= Duration.zero 时直接透传源流，避免多余的 pause/resume
+    // 包装改变 stream 语义（单订阅/广播等）。
+    final wrappedRequest = requestStream != null && writeTimeout > Duration.zero
         ? _WriteIdleTimeoutStream(
             requestStream,
             writeTimeout,
             onIdleTimeout: fireIdleTimeout,
           )
-        : null;
+        : requestStream;
 
     final ResponseBody response;
     try {
@@ -123,7 +125,6 @@ class QiniuHttpClient implements HttpClientAdapter {
         timeoutRace.future,
       ]);
     } catch (e) {
-      print('[DIAG] fetch threw $e at ${DateTime.now()}');
       rethrow;
     }
 
@@ -134,13 +135,26 @@ class QiniuHttpClient implements HttpClientAdapter {
             onIdleTimeout: fireIdleTimeout,
           )
         : response.stream;
-    return ResponseBody(
+    var closed = false;
+    final wrappedResponse = ResponseBody(
       responseStream,
       response.statusCode,
       statusMessage: response.statusMessage,
       headers: response.headers,
       isRedirect: response.isRedirect,
-    );
+      redirects: response.redirects,
+      // 透传 onClose：dio 在错误状态 / 取消 / receive timeout 等路径会调
+      // responseBody.close() 释放底层 socket。response.close() 是 @internal，
+      // 用 ignore 抑制；语义上就是「释放上层传入 delegate 提供的底层资源」。
+      // ignore: invalid_use_of_internal_member
+      onClose: () {
+        if (closed) return;
+        closed = true;
+        // ignore: invalid_use_of_internal_member
+        response.close();
+      },
+    )..extra.addAll(response.extra);
+    return wrappedResponse;
   }
 
   @override
@@ -208,6 +222,9 @@ abstract class _IdleTimeoutSubscriptionBase
   /// listen 现场的栈，timer 触发时作为错误堆栈，便于定位调用方
   final StackTrace _listenStack;
 
+  /// 超时阶段标识，子类设置，用于区分写/读超时
+  final String _phase;
+
   void Function(Uint8List)? _onData;
   Function? _onError;
   void Function()? _onDone;
@@ -218,8 +235,16 @@ abstract class _IdleTimeoutSubscriptionBase
   bool _finished = false;
   bool _canceled = false;
 
-  _IdleTimeoutSubscriptionBase(this._idleTimeout, this._onIdleTimeout)
-      : _listenStack = StackTrace.current;
+  /// 暂停深度：支持连续 pause() / resume() 的嵌套配对。
+  /// 仅在 0→1 时触发 _onConsumerPause，1→0 时触发 _onConsumerResume，
+  /// 中间层级的 pause/resume 透传给底层 _source，不影响包装层状态。
+  int _pauseDepth = 0;
+
+  _IdleTimeoutSubscriptionBase(
+    this._idleTimeout,
+    this._onIdleTimeout,
+    this._phase,
+  ) : _listenStack = StackTrace.current;
 
   /// 子类钩子：每次源吐出数据时回调（早于消费者 onData）
   void _onSourceData();
@@ -289,7 +314,7 @@ abstract class _IdleTimeoutSubscriptionBase
     // 立即取消源订阅，避免 timeout 后还有数据回调
     _source?.cancel();
 
-    final err = TimeoutException('Idle timeout', _idleTimeout);
+    final err = TimeoutException('$_phase idle timeout', _idleTimeout);
 
     // 关键：通过外层回调触发底层 abort。
     // 直接调用消费者 onError 在背压场景下会被 dart:io 的 _HttpOutgoing 内部
@@ -332,14 +357,53 @@ abstract class _IdleTimeoutSubscriptionBase
 
   @override
   void pause([Future<void>? resumeSignal]) {
-    _onConsumerPause();
+    _enterPauseOneLevel();
+    // 当调用方传入 resumeSignal 时，底层订阅会在 future 完成后自动恢复一次，
+    // 但包装层不会同步 _pauseDepth / timer 状态；需在 whenComplete 中
+    // 仅更新包装层状态，不调用会透传 _source.resume() 的 resume()，
+    // 否则嵌套场景下底层会被双 resume（自身自动 + 包装层透传），导致
+    // 背压提前放开。
+    // depth 不会变负：手动 resume() 与 whenComplete 共用 _tryResumeOneLevel
+    // 的 depth==0 守卫，多余调用安全早退。
+    if (resumeSignal != null) {
+      resumeSignal.whenComplete(() {
+        if (!_finished && _source != null) {
+          _tryResumeOneLevel();
+        }
+      });
+    }
     _source?.pause(resumeSignal);
   }
 
   @override
   void resume() {
-    _onConsumerResume();
+    _tryResumeOneLevel();
+    // 始终透传给底层：dart SDK 自身的引用计数会忽略多余的 resume()，不调用则
+    // 会破坏嵌套场景下底层计数的对称性。
     _source?.resume();
+  }
+
+  /// 尝试将包装层从 paused 状态退出一层。
+  /// 仅在 0→1→...→1→0 转换的最后一层（1→0）触发 [_onConsumerResume]。
+  /// 多余的 resume()（_pauseDepth 已为 0）不会触发任何钩子。
+  void _tryResumeOneLevel() {
+    if (_pauseDepth == 0) {
+      return;
+    }
+    _pauseDepth--;
+    if (_pauseDepth == 0) {
+      _onConsumerResume();
+    }
+  }
+
+  /// 将包装层进入 paused 状态一层。
+  /// 仅在 ...→0→1 转换的首次进入（0→1）触发 [_onConsumerPause]。
+  /// 嵌套的 pause() 不会重复触发钩子。
+  void _enterPauseOneLevel() {
+    _pauseDepth++;
+    if (_pauseDepth == 1) {
+      _onConsumerPause();
+    }
   }
 
   @override
@@ -398,7 +462,10 @@ class _WriteIdleTimeoutStream extends Stream<Uint8List> {
 }
 
 class _WriteIdleSubscription extends _IdleTimeoutSubscriptionBase {
-  _WriteIdleSubscription(super.idleTimeout, super.onIdleTimeout);
+  _WriteIdleSubscription(
+    Duration idleTimeout,
+    _IdleTimeoutCallback? onIdleTimeout,
+  ) : super(idleTimeout, onIdleTimeout, 'write');
 
   // 写阶段：onData/onBound 都不启动 timer。
   // 启动时未被 IOSink pause，说明 socket 还能吃，无须开表。
@@ -460,7 +527,10 @@ class _ReadIdleTimeoutStream extends Stream<Uint8List> {
 }
 
 class _ReadIdleSubscription extends _IdleTimeoutSubscriptionBase {
-  _ReadIdleSubscription(super.idleTimeout, super.onIdleTimeout);
+  _ReadIdleSubscription(
+    Duration idleTimeout,
+    _IdleTimeoutCallback? onIdleTimeout,
+  ) : super(idleTimeout, onIdleTimeout, 'read');
 
   // 读阶段：数据流过即视为网络活跃，重置计时器
   @override

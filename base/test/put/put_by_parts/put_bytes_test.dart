@@ -1,4 +1,5 @@
 @Timeout(Duration(seconds: 60))
+import 'dart:async';
 import 'package:qiniu_sdk_base/qiniu_sdk_base.dart';
 import 'package:qiniu_sdk_base/src/storage/task/task_manager.dart';
 import 'package:qiniu_sdk_base/src/storage/methods/put/by_part/put_parts_task.dart';
@@ -316,7 +317,7 @@ void main() {
         key: key,
       );
       final tmpTaskManager = TaskManager();
-      tmpTaskManager.addTask(task);
+      unawaited(tmpTaskManager.addTask(task));
       await task.future;
 
       final putController = PutController();

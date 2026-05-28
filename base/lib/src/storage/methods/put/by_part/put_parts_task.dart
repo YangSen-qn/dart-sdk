@@ -28,6 +28,9 @@ class PutByPartTask extends RequestTask<PutResponse> {
   /// 当前正在使用的区域索引
   int _regionIndex = 0;
 
+  /// 单区域重试次数
+  int _singleRegionRetryCount = 0;
+
   /// 上次错误
   Object? _error;
 
@@ -50,6 +53,10 @@ class PutByPartTask extends RequestTask<PutResponse> {
 
   @override
   Future<void> preStart() async {
+    // 顶层任务：重置进度基线，避免复用同一 Controller 发起第二次上传时
+    // 进度被 `percent <= _lastNotified...` 过滤掉。retry 路径（preRestart）
+    // 不调用，保持进度单调性。
+    controller?.resetProgressBaseline();
     await super.preStart();
 
     // controller 被取消后取消当前运行的子任务
@@ -96,7 +103,7 @@ class PutByPartTask extends RequestTask<PutResponse> {
       await resource.open();
 
       initPartsTask = _createInitPartsTask(_regionIndex);
-      taskManager.addTask(initPartsTask);
+      unawaited(taskManager.addTask(initPartsTask));
       _currentWorkingTaskController = initPartsTask.controller;
       initParts = await initPartsTask.future;
 
@@ -108,7 +115,7 @@ class PutByPartTask extends RequestTask<PutResponse> {
         initParts.uploadId,
       );
       _currentWorkingTaskController = uploadPartsTask.controller;
-      taskManager.addTask(uploadPartsTask);
+      unawaited(taskManager.addTask(uploadPartsTask));
 
       final parts = await uploadPartsTask.future;
       final completePartsTask = _createCompletePartsTask(
@@ -117,7 +124,7 @@ class PutByPartTask extends RequestTask<PutResponse> {
         parts,
       );
       _currentWorkingTaskController = completePartsTask.controller;
-      taskManager.addTask(completePartsTask);
+      unawaited(taskManager.addTask(completePartsTask));
       final putResponse = await completePartsTask.future;
 
       /// 上传完成，清除缓存
@@ -139,6 +146,12 @@ class PutByPartTask extends RequestTask<PutResponse> {
           error.type == StorageErrorType.RESOURCE_READ_EXCEPTION) {
         await initPartsTask?.clearCache();
         await uploadPartsTask?.clearCache();
+        if (_singleRegionRetryCount > 0) {
+          // 每个区域只重试一次
+          _shouldRetry = false;
+        } else {
+          _singleRegionRetryCount++;
+        }
         return Future.error(error);
       }
 
@@ -156,6 +169,8 @@ class PutByPartTask extends RequestTask<PutResponse> {
       }
 
       _regionIndex++;
+      // 切换区域重试，重置单区域重试次数
+      _singleRegionRetryCount = 0;
       _error = error;
       rethrow;
     }

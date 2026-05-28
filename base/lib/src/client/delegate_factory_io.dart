@@ -14,6 +14,11 @@ HttpClientAdapter createDefaultDelegate(int? sendBufferSize) {
       final option = _buildSndBufOption(sendBufferSize);
       if (option != null) {
         client.connectionFactory = (uri, proxyHost, proxyPort) async {
+          // 直连 HTTPS：必须用 SecureSocket.startConnect，HttpClient 拿到 socket
+          // 后不会自己再走 TLS，必须由 connectionFactory 完成。
+          // HTTP / 代理 HTTPS：HttpClient 内部会自己处理（HTTP 走明文，代理 HTTPS
+          // 走 createProxyTunnel），返回裸 TCP Socket 即可。
+          // SO_SNDBUF 在 SecureSocket 完成 TLS 握手后设置的同一 fd 上仍生效。
           final isDirectHttps = uri.isScheme('https') && proxyHost == null;
           final host = proxyHost ?? uri.host;
           final port = proxyPort ?? uri.port;
@@ -23,8 +28,8 @@ HttpClientAdapter createDefaultDelegate(int? sendBufferSize) {
           task.socket.then((socket) {
             try {
               socket.setRawOption(option);
-            } catch (e) {
-              print('[DIAG] setRawOption failed: $e');
+            } catch (_) {
+              // SO_SNDBUF 设置失败不影响正常连接，静默忽略
             }
           });
           return task;

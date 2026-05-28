@@ -6,6 +6,7 @@
 - 新增 `RESOURCE_READ_EXCEPTION` 错误类型
 - 新增 HTTP 客户端读写空闲超时配置
 - 修复 User-Agent 偶尔无效的问题
+- 调整 `Config.retryLimit` 默认值从 `10` 改为 `2`（单域名重试次数，多域名场景下总重试次数 = `retryLimit × 可用域名数`）
 
 ## 0.7.5
 

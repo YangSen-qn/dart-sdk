@@ -26,7 +26,7 @@ void main() {
           await client.fetch(RequestOptions(), controller.stream, null);
           fail('expected TimeoutException');
         } on TimeoutException catch (e) {
-          expect(e.message, 'Idle timeout');
+          expect(e.message, 'write idle timeout');
         }
         await controller.close();
         client.close();
@@ -78,7 +78,7 @@ void main() {
         }
         fail('expected TimeoutException');
       } on TimeoutException catch (e) {
-        expect(e.message, 'Idle timeout');
+        expect(e.message, 'read idle timeout');
       }
       await responseController.close();
       client.close();

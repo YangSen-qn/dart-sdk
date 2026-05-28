@@ -14,7 +14,11 @@ abstract class RequestTask<T> extends Task<T> {
 
   final Dio client = Dio();
 
-  final Config config;
+  /// 配置项
+  Config _config;
+
+  @protected
+  Config get config => _config;
 
   /// 任务控制器，可以用于取消任务、获取上述的状态，进度等信息
   final RequestTaskController? controller;
@@ -27,13 +31,7 @@ abstract class RequestTask<T> extends Task<T> {
 
   Object? _lastError;
 
-  RequestTask(Config config, {this.controller})
-      : config = Config(
-          hostProvider: _HostProvider(config.hostProvider),
-          cacheProvider: config.cacheProvider,
-          httpClientAdapter: config.httpClientAdapter,
-          retryLimit: config.retryLimit,
-        );
+  RequestTask(this._config, {this.controller});
 
   @override
   @mustCallSuper
@@ -43,15 +41,24 @@ abstract class RequestTask<T> extends Task<T> {
       throw StorageError(type: StorageErrorType.CANCEL);
     }
 
-    controller?.notifyStatusListeners(StorageStatus.Init);
-    controller?.notifyProgressListeners(preStartTakePercentOfTotal);
-    retryLimit = config.retryLimit;
-    client.httpClientAdapter = config.httpClientAdapter;
+    /// 需要先计算 UA，因为后续 _config 会被重新赋值，否则 UA 外部配置的 UA
     var userAgent = getDefaultUserAgent();
     final appUserAgent = await config.appUserAgent;
     if (appUserAgent != '') {
       userAgent += ' $appUserAgent';
     }
+
+    _config = Config(
+      hostProvider: _HostProvider(config.hostProvider),
+      cacheProvider: config.cacheProvider,
+      httpClientAdapter: config.httpClientAdapter,
+      retryLimit: config.retryLimit,
+    );
+
+    controller?.notifyStatusListeners(StorageStatus.Init);
+    controller?.notifyProgressListeners(preStartTakePercentOfTotal);
+    retryLimit = _config.retryLimit;
+    client.httpClientAdapter = _config.httpClientAdapter;
     client.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) {
@@ -176,14 +183,18 @@ abstract class RequestTask<T> extends Task<T> {
 
   @protected
   bool isRegionRetryableError(StorageError error) {
-    if (!_canConnectToHost(error) || _isHostUnavailable(error)) {
-      return true;
-    }
     if (_isRetryableResponseCode(error.code)) {
       return true;
     }
-    // upload
+    // upload context 过期
     if (isCtxExpiedError(error.code)) {
+      return true;
+    }
+    // 连接级别的错误（无状态码），可能是区域级故障
+    if (error.code == null &&
+        (error.type == StorageErrorType.CONNECT_TIMEOUT ||
+            error.type == StorageErrorType.SEND_TIMEOUT ||
+            error.type == StorageErrorType.RECEIVE_TIMEOUT)) {
       return true;
     }
     return false;
@@ -197,7 +208,7 @@ abstract class RequestTask<T> extends Task<T> {
   bool _isRetryableResponseCode(int? code) {
     // 只有 5xx 可以重试
     final statusCode = code ?? 0;
-    return statusCode / 100 == 5 && statusCode != 573 && statusCode != 579;
+    return statusCode ~/ 100 == 5 && statusCode != 573 && statusCode != 579;
   }
 
   // host 是否可以连接上

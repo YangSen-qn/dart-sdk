@@ -1,5 +1,6 @@
 @Timeout(Duration(seconds: 60))
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -283,7 +284,7 @@ void main() {
       );
 
       final tmpTaskManager = TaskManager();
-      tmpTaskManager.addTask(task);
+      unawaited(tmpTaskManager.addTask(task));
       await task.future;
 
       final putController = PutController();
@@ -353,15 +354,18 @@ void main() {
       var errorOccurred = false;
 
       // 故意不 await，让后面发送一个相同的任务
+      // 忽略该 Future 的错误，避免未捕获异常影响测试
       // ignore: unawaited_futures
-      storage.putFile(
-        fileForPart,
-        token,
-        options: PutOptions(
-          key: key,
-          partSize: 1,
-        ),
-      );
+      storage
+          .putFile(
+            fileForPart,
+            token,
+            options: PutOptions(
+              key: key,
+              partSize: 1,
+            ),
+          )
+          .catchError((_) => PutResponse(key: '', rawData: {}));
 
       try {
         await storage.putFile(

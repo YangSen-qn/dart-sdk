@@ -6,10 +6,10 @@ part of 'put_parts_task.dart';
 /// 底层 IOSink 只会触发一次 pause/resume，导致 [QiniuHttpClient] 的写阶段
 /// 闲时超时（pause-driven）粒度过粗——一片真实传输 20s 才会 resume 一次。
 ///
-/// 这里再切成 256KB 的小段串流，IOSink 会逐段 pause/resume，
-/// 闲时超时探测的时间粒度恢复到「写不动 256KB 就报警」的层级。
-/// 与 [QiniuHttpClient.sendBufferSize] 默认值（256KB）匹配：每片刚好填满一次内核
-/// send buffer，IOSink 每片 1 次 pause/resume，避免双重限流导致 TCP 拥塞窗口塌陷，
+/// 这里再切成 64KB 的小段串流，IOSink 会逐段 pause/resume，
+/// 闲时超时探测的时间粒度恢复到「写不动 128KB（两片）就报警」的层级。
+/// 与 [QiniuHttpClient.sendBufferSize] 默认值（128KB）匹配：每两片刚好填满一次内核
+/// send buffer，IOSink 每 1 次 pause/resume，避免双重限流导致 TCP 拥塞窗口塌陷，
 /// 同时也避免 microtask round-trip 过多影响吞吐。
 const int _kUploadPartChunkBytes = 64 * 1024;
 

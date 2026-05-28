@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 
 import '../../error/error.dart';
@@ -55,8 +57,23 @@ class StorageError extends QiniuError {
   }
 
   factory StorageError.fromDioError(DioException error) {
+    // TimeoutException 被 Dio 归为 unknown，手动映射到正确的超时类型
+    final StorageErrorType type;
+    if (error.type == DioExceptionType.unknown &&
+        error.error is TimeoutException) {
+      final message = (error.error as TimeoutException).message;
+      if (message is String && message.contains('write')) {
+        type = StorageErrorType.SEND_TIMEOUT;
+      } else if (message is String && message.contains('read')) {
+        type = StorageErrorType.RECEIVE_TIMEOUT;
+      } else {
+        type = StorageErrorType.CONNECT_TIMEOUT;
+      }
+    } else {
+      type = _mapDioErrorType(error.type);
+    }
     return StorageError(
-      type: _mapDioErrorType(error.type),
+      type: type,
       code: error.response?.statusCode,
       message: error.response?.data.toString() ?? error.message,
       rawError: error.error,

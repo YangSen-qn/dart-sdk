@@ -66,6 +66,13 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
     });
 
     _idleRequestNumber = maxPartsRequestNumber;
+    if (_idleRequestNumber <= 0) {
+      throw StorageError(
+        type: StorageErrorType.UNKNOWN,
+        message:
+            'maxPartsRequestNumber must be >= 1, got $maxPartsRequestNumber',
+      );
+    }
     _totalPartCount = (resource.length / resource.chunkSize).ceil();
     final keyList = [
       'region/$regionIndex',
@@ -74,7 +81,7 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
       'key/${resource.name}',
       'part_size/$partSize',
     ];
-    _cacheKey = 'qiniu_dart_sdk_upload_parts_task@[${keyList..join("/")}]';
+    _cacheKey = 'qiniu_dart_sdk_upload_parts_task@[${keyList.join("/")}]';
   }
 
   Future<void> storeUploadedPart() async {
@@ -160,12 +167,13 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
         );
         if (uploadedPart != null) {
           partProgress.percent = 1.0;
+          _partProgressMap[partNumber] = partProgress;
           notifyProgress();
         } else {
           final future = _uploadPartByPartNumber(bytes, partNumber);
           taskFutures.add(future);
+          _partProgressMap[partNumber] = partProgress;
         }
-        _partProgressMap[partNumber] = partProgress;
         break;
       }
       if (!isReadStream) {
@@ -178,16 +186,11 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
     try {
       await Future.wait<void>(taskFutures);
     } catch (e) {
-      print('====== 1 Part upload error: $e ======');
-
       /// 有分片执行失败
       /// 已经有其他分片失败了，不再重复设置错误状态
       if (_error != null) {
-        print('====== 2 Part upload error: $_error ======');
         return;
       }
-
-      print('====== 3 Part upload error: $e ======');
 
       _error ??= e;
 
@@ -257,7 +260,7 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
       notifyProgress();
     });
 
-    _uploadPartTaskManager.addTask(task);
+    unawaited(_uploadPartTaskManager.addTask(task));
     final data = await task.future;
     _uploadPartTaskManager.removeTask(task);
 

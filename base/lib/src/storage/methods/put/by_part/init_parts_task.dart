@@ -106,10 +106,14 @@ class InitPartsTask extends RequestTask<InitParts> with CacheMixin<InitParts> {
     // 有效期往前推 3 小时，避免在上传过程中缓存过期导致的 uploadId 无效问题
     final expireAt = (data.expireAt - 3 * 3600) * 1000;
     if (expireAt > DateTime.now().millisecondsSinceEpoch) {
-      await setCache(
-        json.encode(data.toJson()),
-        expireAt: data.expireAt * 1000,
-      );
+      // 缓存写入失败不应阻止正常上传流程，静默忽略。
+      // uploadId 已成功拿到，缓存只是断点续传的优化手段。
+      try {
+        await setCache(
+          json.encode(data.toJson()),
+          expireAt: expireAt,
+        );
+      } catch (_) {}
     }
     await super.postReceive(data);
   }

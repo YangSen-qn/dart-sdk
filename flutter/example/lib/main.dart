@@ -49,7 +49,7 @@ class BaseState extends State<Base> with DisposableState {
 
   // 用户输入的 token
   String? token =
-      'dxVQk8gyk3WswArbNhdKIwmwibJ9nFsQhMNUmtIM:mAluSKxaeMZf0fPqpfTsS99d94c=:eyJzY29wZSI6InRlc3QteXMiLCJkZWFkbGluZSI6MTc3OTQzMjE2MX0=';
+      'dxVQk8gyk3WswArbNhdKIwmwibJ9nFsQhMNUmtIM:LKr0-zxaKXU4eAfYoKMoKNuT2Jo=:eyJzY29wZSI6InRlc3QteXMiLCJkZWFkbGluZSI6MTc4MDA0NjA4NX0=';
 
   /// 当前选择的文件
   PlatformFile? selectedFile;

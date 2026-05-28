@@ -74,7 +74,7 @@ import 'package:qiniu_flutter_sdk/qiniu_flutter_sdk.dart';
   });
 
   // 使用 storage 的 putFile 对象进行文件上传
-  storage.putFile(File('./file.txt'), 'TOKEN', PutOptions(
+  storage.putFile(File('./file.txt'), 'TOKEN', options: PutOptions(
     controller: putController,
   ))
 ```
@@ -89,7 +89,7 @@ import 'package:qiniu_flutter_sdk/qiniu_flutter_sdk.dart';
   putController = PutController();
 
   // 使用 storage 的 putFile 对象进行文件上传
-  storage.putFile(File('./file.txt'), 'TOKEN', PutOptions(
+  storage.putFile(File('./file.txt'), 'TOKEN', options: PutOptions(
       controller: putController,
   ))
 
@@ -112,7 +112,7 @@ import 'package:qiniu_flutter_sdk/qiniu_flutter_sdk.dart';
 
 ```dart
   // 创建 storage 对象
-  storage = Storage(Config(
+  storage = Storage(config: Config(
     // 通过自己的 hostProvider 来使用自己的 host 进行上传
     hostProvider: HostProvider,
     // 可以通过实现 cacheProvider 来自己实现缓存系统支持分片断点续传
@@ -174,6 +174,8 @@ import 'package:qiniu_flutter_sdk/qiniu_flutter_sdk.dart';
 - `NO_AVAILABLE_HOST` - 没有可用的上传域名
 - `NO_AVAILABLE_REGION` - 没有可用的区域
 - `CONNECT_TIMEOUT` - 连接超时
+- `SEND_TIMEOUT` - 发送数据超时
+- `RECEIVE_TIMEOUT` - 响应数据超时
 - `CANCEL` - 请求取消
 - `RESPONSE` - 服务端响应错误
 - `RESOURCE_READ_EXCEPTION` - 资源读取异常
