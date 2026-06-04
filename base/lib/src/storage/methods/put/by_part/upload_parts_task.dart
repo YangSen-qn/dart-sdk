@@ -21,7 +21,6 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
 
   /// 处理分片上传任务的 UploadPartTask 的控制器
   final List<RequestTaskController> _uploadPartTaskControllers = [];
-  final TaskManager _uploadPartTaskManager = TaskManager();
 
   /// 每个 partNumber 上次回调时的 percent，用于算 delta。
   final Map<int, _PartProgress> _partProgressMap = {};
@@ -156,6 +155,9 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
       final partNumber = ++_uploadingPartIndex;
 
       bool isReadStream = false;
+      // [resource.stream] 是 broadcast stream，每次 `await for` 新订阅都会
+      // 从当前 offset emit 一个 chunk 后立刻自然结束本次订阅，
+      // 下一次 `await for` 继续接力——这是 [Resource] 对外的"分次拉取"协议。
       await for (final bytes in resource.stream) {
         isReadStream = true;
 
@@ -260,9 +262,7 @@ class UploadPartsTask extends RequestTask<List<Part>> with CacheMixin {
       notifyProgress();
     });
 
-    unawaited(_uploadPartTaskManager.addTask(task));
-    final data = await task.future;
-    _uploadPartTaskManager.removeTask(task);
+    final data = await TaskManager.runStandalone(task);
 
     _idleRequestNumber++;
     _uploadedPartMap[partNumber] =

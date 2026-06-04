@@ -34,6 +34,12 @@ abstract class Resource {
 
   ResourceStatus status = ResourceStatus.Init;
 
+  /// 资源的字节流。
+  ///
+  /// 使用 broadcast + onListen 实现"分次拉取"的非标准协议：
+  /// 调用方每次 `await for ... break` 都会从当前 offset 拿到下一个 chunk，
+  /// 连续多次接力即可读完整资源（详见 `resource_test.dart`）。
+  /// retry 时需要重新调 [open]，构造新的 stream 实例从头开始读。
   late Stream<List<int>> stream;
 
   Stream<List<int>> createStream();

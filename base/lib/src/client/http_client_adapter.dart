@@ -2,18 +2,23 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:meta/meta.dart';
 
 import 'delegate_factory.dart';
 
 /// 七牛自定义 HTTP 客户端
 ///
-/// 在 dio 默认的 [HttpClientAdapter] 之上补充：
+/// 包装 dio 默认 [HttpClientAdapter]（Native 端为 `IOHttpClientAdapter`、
+/// Web 端为 `BrowserHttpClientAdapter`），在其之上补充：
 /// - 连接超时 [connectTimeout]
 /// - 请求体闲时超时 [writeTimeout]（pause-driven，监测 socket 写不动）
 /// - 响应体闲时超时 [readTimeout]（data-driven，监测 socket 不再来数据）
 ///
 /// "请求体发完到响应头到达"之间这段不再做应用层检测，
 /// 交给 OS TCP 重传超时（macOS/iOS ~18s，errno=60）兜底。
+///
+/// 仍允许通过构造器的 `delegate` 参数注入自定义底层适配器，
+/// 此时 [sendBufferSize] 不再生效（由调用方自行控制底层连接行为）。
 class QiniuHttpClient implements HttpClientAdapter {
   /// TCP 连接建立超时
   ///
@@ -60,7 +65,11 @@ class QiniuHttpClient implements HttpClientAdapter {
   /// 推荐范围：128 * 1024（128KB）~ 256 * 1024（256KB）
   /// - 过小（< 64KB）：TCP 拥塞窗口拉不起来，影响吞吐
   /// - 过大（接近分片大小）：失去触发 pause-driven idle 检测的作用
-  /// - 默认 128KB 与分片上传的次级切片大小匹配，每片正好填满一次发送缓冲
+  /// - 默认 128KB 与分片上传的次级切片大小（`_kUploadPartChunkBytes`，
+  ///   见 `upload_part_task.dart`，64KB）配套：每两片刚好填满一次内核
+  ///   send buffer，IOSink 每 1 次 pause/resume，使 [writeTimeout] 的
+  ///   pause-driven 探测时间粒度稳定在「写不动 128KB」的层级。
+  ///   修改任一方时请同步评估另一方。
   final int? sendBufferSize;
 
   final HttpClientAdapter _delegate;
@@ -89,13 +98,13 @@ class QiniuHttpClient implements HttpClientAdapter {
     final mergedCancel = _mergeCancelFuture(cancelFuture, localCancel.future);
 
     // 用来把 idle 超时的真实错误抛给外层 await（绕过被 buffer 在 controller 里的 onError）。
-    // 与 fetch 的 Future race，超时方先 complete 即可让上层立刻拿到 TimeoutException。
+    // 与 fetch 的 Future race，超时方先 complete 即可让上层立刻拿到 QiniuIdleTimeoutException。
     final timeoutRace = Completer<ResponseBody>();
 
-    void fireIdleTimeout(TimeoutException err, StackTrace st) {
+    void fireIdleTimeout(QiniuIdleTimeoutException err, StackTrace st) {
       // 触发底层 abort，使 dio 的 addStream / response 链路自然终止
       if (!localCancel.isCompleted) localCancel.complete();
-      // 给外层 await 一个明确的 TimeoutException
+      // 给外层 await 一个明确的 QiniuIdleTimeoutException
       if (!timeoutRace.isCompleted) timeoutRace.completeError(err, st);
     }
 
@@ -113,20 +122,35 @@ class QiniuHttpClient implements HttpClientAdapter {
           )
         : requestStream;
 
-    final ResponseBody response;
-    try {
-      final fetchFuture =
-          _delegate.fetch(options, wrappedRequest, mergedCancel);
-      // 任一 idle 超时触发，timeoutRace 先于 fetch 完成，Future.any 把 TimeoutException
-      // 抛出来。底层 fetchFuture 因为 localCancel → abort 也会随后 reject，
-      // Future.any 内部会静默处理掉这条迟到的失败，不会留下未处理错误。
-      response = await Future.any<ResponseBody>([
-        fetchFuture,
-        timeoutRace.future,
-      ]);
-    } catch (e) {
-      rethrow;
-    }
+    final fetchFuture = _delegate.fetch(options, wrappedRequest, mergedCancel);
+
+    // 自定义优先级 race（替代 Future.any）：
+    // - 正常成功：fetchFuture 完成，complete success
+    // - fetchFuture 自身失败（dio sendTimeout / 网络错误 / badResponse 等）
+    //   且 idle timeout 没触发：透传 fetchFuture 的错误
+    // - idle timeout 触发：timeoutRace 同步 completeError，其 then 回调早于
+    //   fetchFuture 的 cancel reject 进入 microtask 队列，所以 result 必然
+    //   先被 timeoutRace 以 QiniuIdleTimeoutException 完成；fetchFuture 之后
+    //   迟到的 DioException(cancel) 被 `!result.isCompleted` 守卫挡掉，
+    //   既避免覆盖真实错误，也避免 unhandled error 流入 zone
+    final result = Completer<ResponseBody>();
+    fetchFuture.then(
+      (resp) {
+        if (!result.isCompleted) result.complete(resp);
+      },
+      onError: (Object err, StackTrace st) {
+        if (!result.isCompleted) result.completeError(err, st);
+      },
+    );
+    timeoutRace.future.then(
+      (_) {
+        // timeoutRace 只会 completeError，正常路径不会走到这里
+      },
+      onError: (Object err, StackTrace st) {
+        if (!result.isCompleted) result.completeError(err, st);
+      },
+    );
+    final response = await result.future;
 
     final responseStream = readTimeout > Duration.zero
         ? _ReadIdleTimeoutStream(
@@ -179,11 +203,58 @@ class QiniuHttpClient implements HttpClientAdapter {
   }
 }
 
+/// 七牛 HTTP 客户端的闲时超时错误。
+///
+/// [phase] 标记是请求体写入超时（[writePhase]）还是响应体读取超时（[readPhase]），
+/// 上层 `StorageError.fromDioError` 据此映射到
+/// `StorageErrorType.SEND_TIMEOUT` / `StorageErrorType.RECEIVE_TIMEOUT`。
+///
+/// 实现 [TimeoutException] 接口以兼容上层基于 `is TimeoutException` 的判断。
+@internal
+class QiniuIdleTimeoutException implements TimeoutException {
+  /// 请求体写入阶段标识
+  static const String writePhase = 'write';
+
+  /// 响应体读取阶段标识
+  static const String readPhase = 'read';
+
+  @override
+  final String? message;
+  @override
+  final Duration? duration;
+
+  /// 阶段标识，取值为 [writePhase] 或 [readPhase]
+  final String phase;
+
+  QiniuIdleTimeoutException(this.phase, this.duration)
+      : message = '$phase idle timeout';
+
+  @override
+  String toString() => 'QiniuIdleTimeoutException($phase, $duration)';
+}
+
 /// 闲时超时回调签名
 typedef _IdleTimeoutCallback = void Function(
-  TimeoutException err,
+  QiniuIdleTimeoutException err,
   StackTrace st,
 );
+
+/// 用与 Stream API 相同的方式调用用户注册的 onError handler，
+/// 兼容 `void Function(Object)` 和 `void Function(Object, StackTrace)` 两种签名。
+/// 未知签名时回退到 zone 兜底，避免在用户代码里抛 NoSuchMethodError。
+void _invokeUserErrorHandler(
+  Function handler,
+  Object error,
+  StackTrace stack,
+) {
+  if (handler is void Function(Object, StackTrace)) {
+    handler(error, stack);
+  } else if (handler is void Function(Object)) {
+    handler(error);
+  } else {
+    Zone.current.handleUncaughtError(error, stack);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 闲时超时检测：两种语义
@@ -219,10 +290,12 @@ abstract class _IdleTimeoutSubscriptionBase
   /// 闲时超时时通知外层（用于触发底层 abort）
   final _IdleTimeoutCallback? _onIdleTimeout;
 
-  /// listen 现场的栈，timer 触发时作为错误堆栈，便于定位调用方
-  final StackTrace _listenStack;
+  /// listen 现场的栈，timer 触发时作为错误堆栈，便于定位调用方。
+  /// 在 [_bind] 时抓取（订阅创建点），而非构造时（创建点）。
+  StackTrace _listenStack = StackTrace.empty;
 
-  /// 超时阶段标识，子类设置，用于区分写/读超时
+  /// 超时阶段标识，子类设置，用于区分写/读超时。
+  /// 取值为 [QiniuIdleTimeoutException.writePhase] 或 [QiniuIdleTimeoutException.readPhase]
   final String _phase;
 
   void Function(Uint8List)? _onData;
@@ -244,7 +317,7 @@ abstract class _IdleTimeoutSubscriptionBase
     this._idleTimeout,
     this._onIdleTimeout,
     this._phase,
-  ) : _listenStack = StackTrace.current;
+  );
 
   /// 子类钩子：每次源吐出数据时回调（早于消费者 onData）
   void _onSourceData();
@@ -265,6 +338,8 @@ abstract class _IdleTimeoutSubscriptionBase
     void Function()? onDone,
     bool? cancelOnError,
   ) {
+    // 在订阅创建点抓栈，便于 timer 触发时定位调用方
+    _listenStack = StackTrace.current;
     _onData = onData;
     _onError = onError;
     _onDone = onDone;
@@ -314,7 +389,7 @@ abstract class _IdleTimeoutSubscriptionBase
     // 立即取消源订阅，避免 timeout 后还有数据回调
     _source?.cancel();
 
-    final err = TimeoutException('$_phase idle timeout', _idleTimeout);
+    final err = QiniuIdleTimeoutException(_phase, _idleTimeout);
 
     // 关键：通过外层回调触发底层 abort。
     // 直接调用消费者 onError 在背压场景下会被 dart:io 的 _HttpOutgoing 内部
@@ -326,17 +401,14 @@ abstract class _IdleTimeoutSubscriptionBase
     // - 响应体场景下消费者通常是 await for / toList 等，直接收到错误即可立刻终止；
     // - 请求体场景这一步会被 controller buffer 吞掉，但有上面的 _onIdleTimeout 兜底。
     final handler = _onError;
-    if (handler == null) {
-      // 没有注册：在响应体直接被丢弃的极少数路径，把错误送到 zone
-      if (_onIdleTimeout == null) {
-        Zone.current.handleUncaughtError(err, _listenStack);
-      }
+    if (handler != null) {
+      _invokeUserErrorHandler(handler, err, _listenStack);
       return;
     }
-    if (handler is void Function(Object, StackTrace)) {
-      handler(err, _listenStack);
-    } else {
-      handler(err);
+    // 没有注册 onError：在响应体直接被丢弃的极少数路径，
+    // 且也没有 _onIdleTimeout 兜底时，把错误送到 zone 避免静默失败
+    if (_onIdleTimeout == null) {
+      Zone.current.handleUncaughtError(err, _listenStack);
     }
   }
 
@@ -465,7 +537,7 @@ class _WriteIdleSubscription extends _IdleTimeoutSubscriptionBase {
   _WriteIdleSubscription(
     Duration idleTimeout,
     _IdleTimeoutCallback? onIdleTimeout,
-  ) : super(idleTimeout, onIdleTimeout, 'write');
+  ) : super(idleTimeout, onIdleTimeout, QiniuIdleTimeoutException.writePhase);
 
   // 写阶段：onData/onBound 都不启动 timer。
   // 启动时未被 IOSink pause，说明 socket 还能吃，无须开表。
@@ -530,7 +602,7 @@ class _ReadIdleSubscription extends _IdleTimeoutSubscriptionBase {
   _ReadIdleSubscription(
     Duration idleTimeout,
     _IdleTimeoutCallback? onIdleTimeout,
-  ) : super(idleTimeout, onIdleTimeout, 'read');
+  ) : super(idleTimeout, onIdleTimeout, QiniuIdleTimeoutException.readPhase);
 
   // 读阶段：数据流过即视为网络活跃，重置计时器
   @override

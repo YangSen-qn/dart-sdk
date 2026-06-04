@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:dio/dio.dart';
 
+import '../../client/http_client_adapter.dart';
 import '../../error/error.dart';
 
 enum StorageErrorType {
@@ -57,18 +58,18 @@ class StorageError extends QiniuError {
   }
 
   factory StorageError.fromDioError(DioException error) {
-    // TimeoutException 被 Dio 归为 unknown，手动映射到正确的超时类型
+    final rawError = error.error;
     final StorageErrorType type;
-    if (error.type == DioExceptionType.unknown &&
-        error.error is TimeoutException) {
-      final message = (error.error as TimeoutException).message;
-      if (message is String && message.contains('write')) {
-        type = StorageErrorType.SEND_TIMEOUT;
-      } else if (message is String && message.contains('read')) {
-        type = StorageErrorType.RECEIVE_TIMEOUT;
-      } else {
-        type = StorageErrorType.CONNECT_TIMEOUT;
-      }
+    if (rawError is QiniuIdleTimeoutException) {
+      // 七牛闲时超时携带 phase，精确映射
+      type = rawError.phase == QiniuIdleTimeoutException.writePhase
+          ? StorageErrorType.SEND_TIMEOUT
+          : StorageErrorType.RECEIVE_TIMEOUT;
+    } else if (error.type == DioExceptionType.unknown &&
+        rawError is TimeoutException) {
+      // 外部自定义 adapter 抛出的通用 TimeoutException，无法区分阶段，
+      // 统一归为 CONNECT_TIMEOUT 兜底
+      type = StorageErrorType.CONNECT_TIMEOUT;
     } else {
       type = _mapDioErrorType(error.type);
     }
@@ -76,7 +77,7 @@ class StorageError extends QiniuError {
       type: type,
       code: error.response?.statusCode,
       message: error.response?.data.toString() ?? error.message,
-      rawError: error.error,
+      rawError: rawError,
     );
   }
 

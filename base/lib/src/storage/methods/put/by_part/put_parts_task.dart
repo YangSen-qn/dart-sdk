@@ -37,6 +37,13 @@ class PutByPartTask extends RequestTask<PutResponse> {
   /// 是否应该重试，本任务只处理区域间的重试
   bool _shouldRetry = true;
 
+  /// 最近一次 [InitPartsTask]（成功 / 失败均会赋值），
+  /// 用于在错误清理与最终成功路径上清缓存。
+  InitPartsTask? _lastInitPartsTask;
+
+  /// 最近一次 [UploadPartsTask]，用途同上
+  UploadPartsTask? _lastUploadPartsTask;
+
   PutByPartTask({
     required Config config,
     required this.resource,
@@ -93,87 +100,99 @@ class PutByPartTask extends RequestTask<PutResponse> {
 
   @override
   Future<PutResponse> createTask() async {
-    final taskManager = TaskManager();
-
-    InitParts? initParts;
-    InitPartsTask? initPartsTask;
-    UploadPartsTask? uploadPartsTask;
-
     try {
       await resource.open();
-
-      initPartsTask = _createInitPartsTask(_regionIndex);
-      unawaited(taskManager.addTask(initPartsTask));
-      _currentWorkingTaskController = initPartsTask.controller;
-      initParts = await initPartsTask.future;
-
-      /// 初始化任务完成后也告诉外部一个进度
-      controller?.notifyProgressListeners(0.002);
-
-      uploadPartsTask = _createUploadPartsTask(
-        _regionIndex,
-        initParts.uploadId,
-      );
-      _currentWorkingTaskController = uploadPartsTask.controller;
-      unawaited(taskManager.addTask(uploadPartsTask));
-
-      final parts = await uploadPartsTask.future;
-      final completePartsTask = _createCompletePartsTask(
+      final initParts = await _runInit(_regionIndex);
+      final parts = await _runUpload(_regionIndex, initParts.uploadId);
+      final response = await _runComplete(
         _regionIndex,
         initParts.uploadId,
         parts,
       );
-      _currentWorkingTaskController = completePartsTask.controller;
-      unawaited(taskManager.addTask(completePartsTask));
-      final putResponse = await completePartsTask.future;
 
       /// 上传完成，清除缓存
-      await initPartsTask.clearCache();
-      await uploadPartsTask.clearCache();
-      return putResponse;
+      await _lastInitPartsTask?.clearCache();
+      await _lastUploadPartsTask?.clearCache();
+      return response;
     } catch (error) {
-      if (error is! StorageError) {
-        // 不是 StorageError，直接抛出
-        _shouldRetry = false;
-        rethrow;
-      }
-
-      /// 满足以下两种情况清理缓存：
-      /// 1、如果服务端临时文件数据被删除了，清除本地缓存
-      /// 2、源读取异常，之前上传的数据无效
-      /// 不切换区域进行重试
-      if (isCtxExpiedError(error.code) ||
-          error.type == StorageErrorType.RESOURCE_READ_EXCEPTION) {
-        await initPartsTask?.clearCache();
-        await uploadPartsTask?.clearCache();
-        if (_singleRegionRetryCount > 0) {
-          // 每个区域只重试一次
-          _shouldRetry = false;
-        } else {
-          _singleRegionRetryCount++;
-        }
-        return Future.error(error);
-      }
-
-      if (error.type == StorageErrorType.NO_AVAILABLE_REGION) {
-        // 没有可用的区域了，停止重试
-        _shouldRetry = false;
-        return Future.error(_error ?? error);
-      }
-
-      if (error.type == StorageErrorType.CANCEL ||
-          !isRegionRetryableError(error)) {
-        // 没有可用的服务器了，停止重试
-        _shouldRetry = false;
-        return Future.error(error);
-      }
-
-      _regionIndex++;
-      // 切换区域重试，重置单区域重试次数
-      _singleRegionRetryCount = 0;
-      _error = error;
-      rethrow;
+      return await _handleError(error);
     }
+  }
+
+  /// 初始化分片上传，返回 uploadId
+  Future<InitParts> _runInit(int regionIndex) async {
+    final task = _createInitPartsTask(regionIndex);
+    _lastInitPartsTask = task;
+    _currentWorkingTaskController = task.controller;
+    final result = await TaskManager.runStandalone<InitParts>(task);
+
+    /// 初始化任务完成后也告诉外部一个进度
+    controller?.notifyProgressListeners(0.002);
+    return result;
+  }
+
+  /// 上传所有分片
+  Future<List<Part>> _runUpload(int regionIndex, String uploadId) async {
+    final task = _createUploadPartsTask(regionIndex, uploadId);
+    _lastUploadPartsTask = task;
+    _currentWorkingTaskController = task.controller;
+    return await TaskManager.runStandalone(task);
+  }
+
+  /// 合并分片
+  Future<PutResponse> _runComplete(
+    int regionIndex,
+    String uploadId,
+    List<Part> parts,
+  ) async {
+    final task = _createCompletePartsTask(regionIndex, uploadId, parts);
+    _currentWorkingTaskController = task.controller;
+    return await TaskManager.runStandalone(task);
+  }
+
+  /// 错误分发：按错误类型决定 清理缓存 / 切区域重试 / 终止重试 / 单区域内重试
+  Future<PutResponse> _handleError(Object error) async {
+    if (error is! StorageError) {
+      // 不是 StorageError，直接抛出
+      _shouldRetry = false;
+      throw error;
+    }
+
+    /// 满足以下两种情况清理缓存：
+    /// 1、如果服务端临时文件数据被删除了，清除本地缓存
+    /// 2、源读取异常，之前上传的数据无效
+    /// 不切换区域进行重试
+    if (isCtxExpiedError(error.code) ||
+        error.type == StorageErrorType.RESOURCE_READ_EXCEPTION) {
+      await _lastInitPartsTask?.clearCache();
+      await _lastUploadPartsTask?.clearCache();
+      if (_singleRegionRetryCount > 0) {
+        // 每个区域只重试一次
+        _shouldRetry = false;
+      } else {
+        _singleRegionRetryCount++;
+      }
+      throw error;
+    }
+
+    if (error.type == StorageErrorType.NO_AVAILABLE_REGION) {
+      // 没有可用的区域了，停止重试
+      _shouldRetry = false;
+      throw _error ?? error;
+    }
+
+    if (error.type == StorageErrorType.CANCEL ||
+        !isRegionRetryableError(error)) {
+      // 没有可用的服务器了，停止重试
+      _shouldRetry = false;
+      throw error;
+    }
+
+    // 切换区域重试，重置单区域重试次数
+    _regionIndex++;
+    _singleRegionRetryCount = 0;
+    _error = error;
+    throw error;
   }
 
   /// 初始化上传信息，分片上传的第一步

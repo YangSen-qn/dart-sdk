@@ -43,6 +43,13 @@ class FileResource extends Resource {
   Stream<List<int>> createStream() {
     var start = 0;
 
+    // 使用 broadcast + onListen 推进 [start] 实现"分次拉取"的非标准协议：
+    // 每次新 listener 订阅都会从当前 [start] 位置 emit 一个 chunk，
+    // 不 close controller，下一次 listen 继续接力。
+    // 这是 [Resource.stream] 对外约定的行为，调用方可以连续 `await for ... break`
+    // 接力读完整资源；详见 `resource_test.dart` 的契约测试。
+    //
+    // 不改成 `raf.openRead` 那种方式，是因为这种方式省内存。
     _controller = StreamController<List<int>>.broadcast(
       onListen: () {
         raf.setPositionSync(start);
@@ -50,7 +57,6 @@ class FileResource extends Resource {
         // 读文件过程中被结束了
         // 连不上报错可能导致还在有 read 的任务，这时立即 close 操作会触发冲突
         // 文件读完检测一下当前 raf 是不是已经打算被 close
-        // 不改成 raf.openRead 那种方式，是因为这种方式省内存
         if (waitingForCloseRafs.contains(raf)) {
           raf.closeSync();
           waitingForCloseRafs.remove(raf);

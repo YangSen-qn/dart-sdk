@@ -24,8 +24,9 @@ void main() {
 
         try {
           await client.fetch(RequestOptions(), controller.stream, null);
-          fail('expected TimeoutException');
-        } on TimeoutException catch (e) {
+          fail('expected QiniuIdleTimeoutException');
+        } on QiniuIdleTimeoutException catch (e) {
+          expect(e.phase, QiniuIdleTimeoutException.writePhase);
           expect(e.message, 'write idle timeout');
         }
         await controller.close();
@@ -76,8 +77,9 @@ void main() {
         await for (final _ in response.stream) {
           // 收到第一块数据后不再有数据，超时触发
         }
-        fail('expected TimeoutException');
-      } on TimeoutException catch (e) {
+        fail('expected QiniuIdleTimeoutException');
+      } on QiniuIdleTimeoutException catch (e) {
+        expect(e.phase, QiniuIdleTimeoutException.readPhase);
         expect(e.message, 'read idle timeout');
       }
       await responseController.close();
@@ -137,6 +139,37 @@ void main() {
       client.close();
     });
 
+    test(
+      'write timeout does not leak unhandled exception to zone',
+      () async {
+        // 回归测试：闲时超时触发 abort 后 fetchFuture 也会以错误 reject，
+        // Future.any 不会消化未取走的失败。必须挂 catchError 兜底，
+        // 否则会进入 zone uncaughtError handler 产生 "Unhandled Exception"。
+        final unhandledErrors = <Object>[];
+        await runZonedGuarded(() async {
+          final controller = StreamController<Uint8List>();
+          final client = QiniuHttpClient(
+            writeTimeout: const Duration(milliseconds: 50),
+            readTimeout: Duration.zero,
+            delegate: _PauseAndStallAdapter(),
+          );
+          controller.add(Uint8List.fromList([1, 2, 3]));
+          try {
+            await client.fetch(RequestOptions(), controller.stream, null);
+          } on QiniuIdleTimeoutException {
+            // expected
+          }
+          // 等迟到的 abort 错误流过
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          await controller.close();
+          client.close();
+        }, (error, stack) {
+          unhandledErrors.add(error);
+        });
+        expect(unhandledErrors, isEmpty);
+      },
+    );
+
     test('connectTimeout is set on options when not specified', () async {
       const connectTimeout = Duration(seconds: 15);
       final client = QiniuHttpClient(
@@ -146,6 +179,27 @@ void main() {
       await client.fetch(RequestOptions(), null, null);
       client.close();
     });
+
+    test(
+      'non-idle errors from delegate are surfaced (not swallowed to empty resp)',
+      () async {
+        // 回归测试问题 2：delegate 自身失败时（比如 dio 的 sendTimeout、
+        // 网络错误等），idle timer 不会触发，错误必须能透传给上层，
+        // 不能被 catchError 吃成空 ResponseBody
+        final client = QiniuHttpClient(
+          writeTimeout: const Duration(seconds: 10),
+          readTimeout: const Duration(seconds: 10),
+          delegate: _AlwaysFailAdapter(),
+        );
+        try {
+          await client.fetch(RequestOptions(), null, null);
+          fail('expected StateError from delegate');
+        } on StateError catch (e) {
+          expect(e.message, 'delegate failure');
+        }
+        client.close();
+      },
+    );
   });
 }
 
@@ -271,6 +325,21 @@ class _ConnectTimeoutAssertAdapter implements HttpClientAdapter {
   ) async {
     expect(options.connectTimeout, expectedConnectTimeout);
     return ResponseBody(Stream.empty(), 200, headers: {});
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+/// 始终以错误结束，模拟 delegate 自身失败（非 idle timeout）
+class _AlwaysFailAdapter implements HttpClientAdapter {
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    throw StateError('delegate failure');
   }
 
   @override

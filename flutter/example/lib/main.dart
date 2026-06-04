@@ -48,8 +48,9 @@ class BaseState extends State<Base> with DisposableState {
   int partSize = 1;
 
   // 用户输入的 token
-  String? token =
-      'dxVQk8gyk3WswArbNhdKIwmwibJ9nFsQhMNUmtIM:LKr0-zxaKXU4eAfYoKMoKNuT2Jo=:eyJzY29wZSI6InRlc3QteXMiLCJkZWFkbGluZSI6MTc4MDA0NjA4NX0=';
+  // 运行示例前请通过界面上方的输入框填入有效的上传 token，
+  // 切勿在源码中硬编码生产环境 token。
+  String? token;
 
   /// 当前选择的文件
   PlatformFile? selectedFile;

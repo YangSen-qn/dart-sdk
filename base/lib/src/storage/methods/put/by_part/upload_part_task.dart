@@ -76,6 +76,9 @@ class UploadPartTask extends RequestTask<UploadPart> {
 
     final bucket = _tokenInfo.putPolicy.getBucket();
 
+    // 本任务执行期间，[PutByPartTask._regionIndex] 不会改变：
+    // 区域切换发生在外层 [UploadPartsTask] 整体失败之后（所有 part 已 settle），
+    // 因此这里每片分别 getUpHost 不会出现跨区域混用 host 的情况。
     final host = await config.hostProvider.getUpHost(
       bucket: bucket,
       accessKey: _tokenInfo.accessKey,

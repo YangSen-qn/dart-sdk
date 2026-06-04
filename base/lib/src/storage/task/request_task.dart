@@ -48,11 +48,8 @@ abstract class RequestTask<T> extends Task<T> {
       userAgent += ' $appUserAgent';
     }
 
-    _config = Config(
+    _config = config.copyWith(
       hostProvider: _HostProvider(config.hostProvider),
-      cacheProvider: config.cacheProvider,
-      httpClientAdapter: config.httpClientAdapter,
-      retryLimit: config.retryLimit,
     );
 
     controller?.notifyStatusListeners(StorageStatus.Init);
